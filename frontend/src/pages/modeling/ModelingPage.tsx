@@ -1,6 +1,6 @@
-// frontend/src/pages/modeling/ModelingPage.tsx
+// Fixed ModelingPage.tsx - Added missing functionality and proper node selection
 import React, { useState, useEffect } from 'react';
-import { DecisionTree, TreeNode, CreateNodeRequest } from '../../types/DecisionTree';
+import { DecisionTree, TreeNode, CreateNodeRequest, NodeType } from '../../types/DecisionTree';
 import { apiService } from '../../services/api';
 import TreeList from '../../components/modeling/TreeList';
 import SimpleTreeVisualization from '../../components/modeling/SimpleTreeVisualization';
@@ -9,6 +9,7 @@ import ExpectedValuePanel from '../../components/modeling/ExpectedValuePanel';
 
 const ModelingPage: React.FC = () => {
   const [selectedTree, setSelectedTree] = useState<DecisionTree | null>(null);
+  const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null); // Added missing state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isNodeModalOpen, setIsNodeModalOpen] = useState(false);
@@ -23,7 +24,9 @@ const ModelingPage: React.FC = () => {
       setError(null);
       const detailedTree = await apiService.getTree(tree.id);
       setSelectedTree(detailedTree);
+      console.log('Loaded tree details:', detailedTree); // Debug logging
     } catch (err) {
+      console.error('Failed to load tree:', err); // Debug logging
       setError(err instanceof Error ? err.message : 'Failed to load tree details');
     } finally {
       setLoading(false);
@@ -32,27 +35,81 @@ const ModelingPage: React.FC = () => {
 
   const handleSelectTree = (tree: DecisionTree) => {
     setSelectedTree(tree);
+    setSelectedNode(null); // Clear selected node when changing trees
     setExpectedValue(null);
     loadTreeDetails(tree);
   };
 
+  // Added missing node selection handler
+  const handleSelectNode = (node: TreeNode | null) => {
+    setSelectedNode(node);
+  };
+
   const handleAddChild = (parentNode: TreeNode) => {
+    console.log('Adding child to parent:', parentNode); // Debug logging
     setSelectedParentNode(parentNode);
     setEditingNode(null);
     setIsNodeModalOpen(true);
   };
 
   const handleEditNode = (node: TreeNode) => {
+    console.log('Editing node:', node); // Debug logging
     setEditingNode(node);
     setSelectedParentNode(null);
     setIsNodeModalOpen(true);
   };
 
-  const handleSaveNode = async (data: CreateNodeRequest) => {
+  // Added missing node type conversion handler
+  const handleChangeNodeType = async (node: TreeNode, newType: 'chance' | 'terminal') => {
+    if (!selectedTree) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Convert string to NodeType enum
+      const nodeType = newType === 'chance' ? NodeType.CHANCE : NodeType.TERMINAL;
+
+      // Prepare update data
+      const updateData: Partial<CreateNodeRequest> = {
+        name: node.name,
+        node_type: nodeType,
+        cost: node.cost || 0,
+      };
+
+      // Set appropriate defaults for the new type
+      if (newType === 'chance') {
+        updateData.probability = 0.5; // Default probability
+        updateData.utility = undefined; // Clear utility
+      } else if (newType === 'terminal') {
+        updateData.utility = 0; // Default utility
+        updateData.probability = undefined; // Clear probability
+      }
+
+      // Update the node
+      await apiService.updateNode(selectedTree.id, node.id, updateData);
+      
+      // Reload tree to get updated structure
+      await loadTreeDetails(selectedTree);
+      
+      // Clear selection since the node has changed
+      setSelectedNode(null);
+      
+    } catch (err) {
+      console.error('Failed to change node type:', err);
+      setError(err instanceof Error ? err.message : 'Failed to change node type');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveNode = async (data: CreateNodeRequest): Promise<void> => {
     if (!selectedTree) return;
 
     try {
       setIsSaving(true);
+      console.log('Saving node:', data); // Debug logging
+      console.log('Parent node:', selectedParentNode); // Debug logging
       
       if (editingNode) {
         // Update existing node
@@ -67,8 +124,11 @@ const ModelingPage: React.FC = () => {
       setIsNodeModalOpen(false);
       setSelectedParentNode(null);
       setEditingNode(null);
+      setSelectedNode(null); // Clear selection after save
     } catch (err) {
+      console.error('Failed to save node:', err);
       setError(err instanceof Error ? err.message : 'Failed to save node');
+      throw err; // Re-throw so the modal can handle the error
     } finally {
       setIsSaving(false);
     }
@@ -102,6 +162,27 @@ const ModelingPage: React.FC = () => {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to validate tree');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle delete node functionality
+  const handleDeleteNode = async (node: TreeNode) => {
+    if (!selectedTree) return;
+
+    const confirmMessage = `Are you sure you want to delete "${node.name}"? This will also delete all child nodes.`;
+    if (!confirm(confirmMessage)) return;
+
+    try {
+      setLoading(true);
+      await apiService.deleteNode(selectedTree.id, node.id);
+      
+      // Reload tree to get updated structure
+      await loadTreeDetails(selectedTree);
+      setSelectedNode(null); // Clear selection
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete node');
     } finally {
       setLoading(false);
     }
@@ -158,14 +239,17 @@ const ModelingPage: React.FC = () => {
                 ) : (
                   <SimpleTreeVisualization
                     tree={selectedTree}
+                    selectedNode={selectedNode}
+                    onSelectNode={handleSelectNode}
                     onEditNode={handleEditNode}
                     onAddChild={handleAddChild}
+                    onChangeNodeType={handleChangeNodeType}
                   />
                 )}
-                <div>
-                    <ExpectedValuePanel tree={selectedTree} />
-                </div>
               </div>
+
+              {/* Expected Value Panel */}
+              <ExpectedValuePanel tree={selectedTree} />
 
               {/* Analysis Panel */}
               <div className="bg-white shadow rounded-lg">
@@ -188,6 +272,15 @@ const ModelingPage: React.FC = () => {
                     >
                       Validate Structure
                     </button>
+                    {selectedNode && (
+                      <button
+                        onClick={() => handleDeleteNode(selectedNode)}
+                        disabled={loading}
+                        className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+                      >
+                        Delete Selected Node
+                      </button>
+                    )}
                   </div>
 
                   {expectedValue && (
@@ -217,7 +310,14 @@ const ModelingPage: React.FC = () => {
               {/* Tree Information */}
               <div className="bg-white shadow rounded-lg">
                 <div className="p-4 border-b border-gray-200">
-                  <h3 className="font-medium text-gray-900">Tree Information</h3>
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-medium text-gray-900">Tree Information</h3>
+                    {selectedNode && (
+                      <div className="text-sm text-blue-600">
+                        Selected: {selectedNode.name} ({selectedNode.node_type})
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="p-4">
                   <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
@@ -247,6 +347,24 @@ const ModelingPage: React.FC = () => {
                         <dd className="text-sm text-gray-900">{selectedTree.description}</dd>
                       </div>
                     )}
+                    {selectedNode && (
+                      <div className="sm:col-span-2 pt-3 border-t border-gray-200">
+                        <dt className="text-sm font-medium text-gray-500">Selected Node Details</dt>
+                        <dd className="text-sm text-gray-900 mt-1">
+                          <div><strong>Name:</strong> {selectedNode.name}</div>
+                          <div><strong>Type:</strong> {selectedNode.node_type}</div>
+                          {selectedNode.node_type === 'chance' && selectedNode.probability !== null && selectedNode.probability !== undefined && (
+                            <div><strong>Probability:</strong> {(selectedNode.probability * 100).toFixed(1)}%</div>
+                          )}
+                          {selectedNode.node_type === 'terminal' && selectedNode.utility !== null && selectedNode.utility !== undefined && (
+                            <div><strong>Utility:</strong> {selectedNode.utility}</div>
+                          )}
+                          {selectedNode.cost !== null && selectedNode.cost !== undefined && selectedNode.cost !== 0 && (
+                            <div><strong>Cost:</strong> ${selectedNode.cost}</div>
+                          )}
+                        </dd>
+                      </div>
+                    )}
                   </dl>
                 </div>
               </div>
@@ -254,7 +372,6 @@ const ModelingPage: React.FC = () => {
           ) : (
             <div className="bg-white shadow rounded-lg">
               <div className="p-8 text-center">
-                
                 <h3 className="mt-2 text-sm font-medium text-gray-900">No tree selected</h3>
                 <p className="mt-1 text-sm text-gray-500">
                   Select a decision tree from the sidebar to start modeling.
@@ -274,9 +391,8 @@ const ModelingPage: React.FC = () => {
           setEditingNode(null);
         }}
         onSave={handleSaveNode}
-        parentNode={selectedParentNode || undefined}
-        editingNode={editingNode || undefined}
-        isLoading={isSaving}
+        selectedParentNode={selectedParentNode}
+        editingNode={editingNode}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-// Enhanced SimpleTreeVisualization.tsx with selection-based node addition
+// Enhanced SimpleTreeVisualization.tsx with corrected node addition logic
 import React from 'react';
 import { DecisionTree, TreeNode } from '../../types/DecisionTree';
 
@@ -77,15 +77,15 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
     return styles;
   };
 
-  // Check what types of children a node can have
+  // FIXED: Correct logic for what types of children a node can have
   const getValidChildTypes = (nodeType: string): ('decision' | 'chance' | 'terminal')[] => {
     switch (nodeType) {
       case 'decision':
-        return ['chance']; // Decision nodes can only have chance nodes as children
+        return ['chance', 'terminal']; // Decision nodes can have chance OR terminal children
       case 'chance':
-        return ['chance', 'terminal']; // Chance nodes can have chance or terminal children
+        return ['chance', 'terminal']; // Chance nodes can have chance OR terminal children
       case 'terminal':
-        return []; // Terminal nodes cannot have children (but can be converted)
+        return []; // Terminal nodes cannot have children
       default:
         return [];
     }
@@ -125,14 +125,19 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
               <div className="text-center leading-tight">
                 {node.name}
               </div>
-              {node.node_type === 'chance' && node.probability && (
+              {node.node_type === 'chance' && node.probability !== null && node.probability !== undefined && (
                 <div className="text-xs opacity-75">
                   {(node.probability * 100).toFixed(0)}%
                 </div>
               )}
-              {(node.cost !== null && node.cost !== undefined) && (
+              {node.node_type === 'terminal' && node.utility !== null && node.utility !== undefined && (
                 <div className="text-xs opacity-75">
-                  ${node.cost}
+                  U: {node.utility}
+                </div>
+              )}
+              {(node.cost !== null && node.cost !== undefined && node.cost !== 0) && (
+                <div className="text-xs opacity-75">
+                  C: ${node.cost}
                 </div>
               )}
             </div>
@@ -257,20 +262,20 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
         </div>
       </div>
       
-      {/* Legend */}
+      {/* UPDATED Legend */}
       <div className="bg-gray-50 border-b px-4 py-2">
         <div className="flex gap-6 text-sm">
           <div className="flex items-center gap-2">
             <div className="w-4 h-3 bg-blue-100 border border-blue-500 rounded"></div>
-            <span>Decision → Chance</span>
+            <span>Decision → Chance/Terminal</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-red-100 border border-red-500 rounded-full"></div>
-            <span>Chance → Chance/Terminal</span>
+            <span>Chance → Chance/Terminal (with probability)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-3 bg-green-100 border border-green-500 transform rotate-45"></div>
-            <span>Terminal (convert to add)</span>
+            <span>Terminal (with utility, no children)</span>
           </div>
         </div>
       </div>
@@ -280,7 +285,7 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
         {renderTree()}
       </div>
 
-      {/* Selection Panel */}
+      {/* UPDATED Selection Panel */}
       {selectedNode && (
         <div className="fixed bottom-4 right-4 bg-white border border-gray-300 rounded-lg shadow-lg p-4 max-w-sm">
           <div className="flex items-center gap-2 mb-3">
@@ -291,27 +296,29 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
             <div>
               <div className="font-medium">{selectedNode.name}</div>
               <div className="text-sm text-gray-500 capitalize">{selectedNode.node_type} node</div>
+              {selectedNode.node_type === 'chance' && selectedNode.probability !== null && selectedNode.probability !== undefined && (
+                <div className="text-xs text-gray-600">Probability: {(selectedNode.probability * 100).toFixed(0)}%</div>
+              )}
+              {selectedNode.node_type === 'terminal' && selectedNode.utility !== null && selectedNode.utility !== undefined && (
+                <div className="text-xs text-gray-600">Utility: {selectedNode.utility}</div>
+              )}
             </div>
           </div>
           
           <div className="space-y-2">
-            {/* Add Children Buttons */}
+            {/* Add Children Buttons - UPDATED */}
             {canAddChildren(selectedNode.node_type) && (
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">Add Child Node:</div>
-                {getValidChildTypes(selectedNode.node_type).map(childType => (
-                  <button
-                    key={childType}
-                    onClick={() => onAddChild(selectedNode)}
-                    className={`w-full p-2 text-sm border rounded mb-1 transition-colors ${
-                      childType === 'chance' 
-                        ? 'bg-red-50 border-red-200 text-red-800 hover:bg-red-100'
-                        : 'bg-green-50 border-green-200 text-green-800 hover:bg-green-100'
-                    }`}
-                  >
-                    Add {childType.charAt(0).toUpperCase() + childType.slice(1)} Node
-                  </button>
-                ))}
+                <button
+                  onClick={() => onAddChild(selectedNode)}
+                  className="w-full p-2 text-sm bg-blue-50 border border-blue-200 text-blue-800 hover:bg-blue-100 rounded transition-colors mb-1"
+                >
+                  Add Child Node
+                </button>
+                <div className="text-xs text-gray-500">
+                  Can add: {getValidChildTypes(selectedNode.node_type).join(' or ')} nodes
+                </div>
               </div>
             )}
             

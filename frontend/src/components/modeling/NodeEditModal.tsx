@@ -1,15 +1,6 @@
-// Enhanced NodeEditModal.tsx
+// Enhanced NodeEditModal.tsx - Fixed for proper node type handling
 import React, { useState, useEffect } from 'react';
-import { TreeNode } from '../../types/DecisionTree';
-
-interface CreateNodeRequest {
-  name: string;
-  node_type: 'decision' | 'chance' | 'terminal';
-  parent_node_id?: string;
-  probability?: number;
-  cost?: number;
-  utility?: number;
-}
+import { TreeNode, CreateNodeRequest, NodeType } from '../../types/DecisionTree';
 
 interface NodeEditModalProps {
   isOpen: boolean;
@@ -28,7 +19,7 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
 }) => {
   const [formData, setFormData] = useState<CreateNodeRequest>({
     name: '',
-    node_type: 'decision',
+    node_type: NodeType.DECISION,
     parent_node_id: undefined,
     probability: undefined,
     cost: undefined,
@@ -45,21 +36,30 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
         // Editing existing node
         setFormData({
           name: editingNode.name,
-          node_type: editingNode.node_type as 'decision' | 'chance' | 'terminal',
+          node_type: editingNode.node_type,
           parent_node_id: editingNode.parent_node_id || undefined,
           probability: editingNode.probability || undefined,
           cost: editingNode.cost || undefined,
           utility: editingNode.utility || undefined,
         });
       } else {
-        // Creating new node
+        // Creating new node - determine appropriate default type based on parent
+        let defaultType: NodeType = NodeType.DECISION;
+        
+        if (selectedParentNode) {
+          // If parent is decision or chance, default to chance node
+          if (selectedParentNode.node_type === NodeType.DECISION || selectedParentNode.node_type === NodeType.CHANCE) {
+            defaultType = NodeType.CHANCE;
+          }
+        }
+        
         setFormData({
           name: '',
-          node_type: 'decision',
+          node_type: defaultType,
           parent_node_id: selectedParentNode?.id,
-          probability: undefined,
-          cost: undefined,
-          utility: undefined,
+          probability: defaultType === NodeType.CHANCE ? 0.5 : undefined, // Default probability for chance nodes
+          cost: 0,
+          utility: undefined, // Will be set to 0 if user selects terminal type
         });
       }
       setErrors({});
@@ -73,11 +73,18 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
       newErrors.name = 'Node name is required';
     }
 
-    if (formData.node_type === 'chance') {
+    // Validate based on node type
+    if (formData.node_type === NodeType.CHANCE) {
       if (formData.probability === undefined || formData.probability === null) {
         newErrors.probability = 'Probability is required for chance nodes';
       } else if (formData.probability < 0 || formData.probability > 1) {
         newErrors.probability = 'Probability must be between 0 and 1';
+      }
+    }
+
+    if (formData.node_type === NodeType.TERMINAL) {
+      if (formData.utility === undefined || formData.utility === null) {
+        newErrors.utility = 'Utility is required for terminal nodes';
       }
     }
 
@@ -94,7 +101,25 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
 
     setIsLoading(true);
     try {
-      await onSave(formData);
+      // Clean up data based on node type
+      const cleanedData: CreateNodeRequest = {
+        name: formData.name,
+        node_type: formData.node_type,
+        parent_node_id: formData.parent_node_id,
+        cost: formData.cost || 0,
+      };
+
+      // Only include probability for chance nodes
+      if (formData.node_type === NodeType.CHANCE) {
+        cleanedData.probability = formData.probability;
+      }
+
+      // Only include utility for terminal nodes
+      if (formData.node_type === NodeType.TERMINAL) {
+        cleanedData.utility = formData.utility;
+      }
+
+      await onSave(cleanedData);
       onClose();
     } catch (error) {
       console.error('Failed to save node:', error);
@@ -104,35 +129,78 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
     }
   };
 
-  const getNodeTypeInfo = (type: string) => {
+  const handleNodeTypeChange = (newType: NodeType) => {
+    setFormData(prev => {
+      const updated = { ...prev, node_type: newType };
+      
+      // Set appropriate defaults when changing type
+      if (newType === NodeType.CHANCE && (prev.probability === undefined || prev.probability === null)) {
+        updated.probability = 0.5; // Default probability
+      } else if (newType !== NodeType.CHANCE) {
+        updated.probability = undefined; // Clear probability for non-chance nodes
+      }
+      
+      if (newType === NodeType.TERMINAL && (prev.utility === undefined || prev.utility === null)) {
+        updated.utility = 0; // Default utility
+      } else if (newType !== NodeType.TERMINAL) {
+        updated.utility = undefined; // Clear utility for non-terminal nodes
+      }
+      
+      return updated;
+    });
+  };
+
+  const getNodeTypeInfo = (type: NodeType) => {
     switch (type) {
-      case 'decision':
+      case NodeType.DECISION:
         return {
           icon: '□',
           color: 'text-blue-600',
-          description: 'A choice point where you decide between options'
+          description: 'A choice point where you decide between options',
+          properties: 'No probability or utility required'
         };
-      case 'chance':
+      case NodeType.CHANCE:
         return {
           icon: '○',
           color: 'text-red-600',
-          description: 'An uncertain event with a probability'
+          description: 'An uncertain event with a probability',
+          properties: 'Requires probability (0.0 to 1.0)'
         };
-      case 'terminal':
+      case NodeType.TERMINAL:
         return {
           icon: '◊',
           color: 'text-green-600',
-          description: 'An endpoint with a final outcome'
+          description: 'An endpoint with a final outcome',
+          properties: 'Requires utility/value, cannot have children'
         };
       default:
-        return { icon: '?', color: 'text-gray-600', description: 'Unknown node type' };
+        return { icon: '?', color: 'text-gray-600', description: 'Unknown node type', properties: '' };
+    }
+  };
+
+  // Get valid child types for the parent node
+  const getValidChildTypes = (): NodeType[] => {
+    if (!selectedParentNode || editingNode) {
+      return [NodeType.DECISION, NodeType.CHANCE, NodeType.TERMINAL]; // Allow all types when editing or no parent
+    }
+    
+    switch (selectedParentNode.node_type) {
+      case NodeType.DECISION:
+        return [NodeType.CHANCE, NodeType.TERMINAL];
+      case NodeType.CHANCE:
+        return [NodeType.CHANCE, NodeType.TERMINAL];
+      case NodeType.TERMINAL:
+        return []; // Terminal nodes cannot have children
+      default:
+        return [NodeType.DECISION, NodeType.CHANCE, NodeType.TERMINAL];
     }
   };
 
   if (!isOpen) return null;
 
   const isEditing = !!editingNode;
-  const nodeTypeInfo = getNodeTypeInfo(formData.node_type);
+  const nodeTypeInfo = getNodeTypeInfo(formData.node_type as NodeType);
+  const validChildTypes = getValidChildTypes();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -157,6 +225,9 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
             <div className="bg-gray-50 p-3 rounded-lg">
               <p className="text-sm text-gray-600">
                 Adding child node to: <span className="font-medium">{selectedParentNode.name}</span>
+                <span className="text-xs block mt-1">
+                  Can add: {validChildTypes.join(', ')} nodes
+                </span>
               </p>
             </div>
           )}
@@ -184,27 +255,30 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               Node Type *
             </label>
             <div className="space-y-2">
-              {(['decision', 'chance', 'terminal'] as const).map((type) => {
+              {([NodeType.DECISION, NodeType.CHANCE, NodeType.TERMINAL] as const)
+                .filter(type => isEditing || validChildTypes.includes(type) || validChildTypes.length === 0)
+                .map((type) => {
                 const info = getNodeTypeInfo(type);
+                const isDisabled = !isEditing && validChildTypes.length > 0 && !validChildTypes.includes(type);
+                
                 return (
-                  <label key={type} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                  <label key={type} className={`flex items-center p-3 border rounded-lg cursor-pointer ${
+                    isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'
+                  }`}>
                     <input
                       type="radio"
                       name="node_type"
                       value={type}
                       checked={formData.node_type === type}
-                      onChange={(e) => setFormData({ 
-                        ...formData, 
-                        node_type: e.target.value as 'decision' | 'chance' | 'terminal',
-                        // Clear probability if switching away from chance
-                        probability: e.target.value === 'chance' ? formData.probability : undefined
-                      })}
+                      onChange={(e) => handleNodeTypeChange(e.target.value as NodeType)}
+                      disabled={isDisabled}
                       className="mr-3"
                     />
                     <span className={`text-lg mr-2 ${info.color}`}>{info.icon}</span>
                     <div>
                       <div className="font-medium capitalize">{type}</div>
                       <div className="text-sm text-gray-500">{info.description}</div>
+                      <div className="text-xs text-gray-400">{info.properties}</div>
                     </div>
                   </label>
                 );
@@ -212,8 +286,8 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
             </div>
           </div>
 
-          {/* Probability (for chance nodes) */}
-          {formData.node_type === 'chance' && (
+          {/* Probability (only for chance nodes) */}
+          {formData.node_type === NodeType.CHANCE && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Probability * (0.0 to 1.0)
@@ -240,6 +314,32 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
             </div>
           )}
 
+          {/* Utility (only for terminal nodes) */}
+          {formData.node_type === NodeType.TERMINAL && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Utility/Value *
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={formData.utility || ''}
+                onChange={(e) => setFormData({ 
+                  ...formData, 
+                  utility: e.target.value ? parseFloat(e.target.value) : undefined 
+                })}
+                className={`w-full p-2 border rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500 ${
+                  errors.utility ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="1000.00"
+              />
+              {errors.utility && <p className="text-red-500 text-xs mt-1">{errors.utility}</p>}
+              <p className="text-xs text-gray-500 mt-1">
+                Expected value or utility of this outcome
+              </p>
+            </div>
+          )}
+
           {/* Cost (optional for all nodes) */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -257,33 +357,13 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               className={`w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
                 errors.cost ? 'border-red-500' : 'border-gray-300'
               }`}
-              placeholder="100.00"
+              placeholder="0.00"
             />
             {errors.cost && <p className="text-red-500 text-xs mt-1">{errors.cost}</p>}
+            <p className="text-xs text-gray-500 mt-1">
+              Cost associated with this choice or outcome
+            </p>
           </div>
-
-          {/* Utility (mainly for terminal nodes) */}
-          {(formData.node_type === 'terminal' || formData.utility !== undefined) && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Utility/Value (optional)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.utility || ''}
-                onChange={(e) => setFormData({ 
-                  ...formData, 
-                  utility: e.target.value ? parseFloat(e.target.value) : undefined 
-                })}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                placeholder="1000.00"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Expected value or utility of this outcome
-              </p>
-            </div>
-          )}
 
           {/* General Error */}
           {errors.general && (
@@ -308,7 +388,7 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
             className={`px-4 py-2 text-white rounded-md focus:ring-2 focus:ring-blue-500 ${
               isLoading 
                 ? 'bg-gray-400 cursor-not-allowed' 
-                : `bg-${nodeTypeInfo.color.includes('blue') ? 'blue' : nodeTypeInfo.color.includes('red') ? 'red' : 'green'}-600 hover:bg-${nodeTypeInfo.color.includes('blue') ? 'blue' : nodeTypeInfo.color.includes('red') ? 'red' : 'green'}-700`
+                : 'bg-blue-600 hover:bg-blue-700'
             }`}
           >
             {isLoading ? 'Saving...' : (isEditing ? 'Update Node' : 'Create Node')}

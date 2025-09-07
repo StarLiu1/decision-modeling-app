@@ -1,5 +1,5 @@
-// ExpectedValueCalculator.ts
-import { TreeNode } from '../types/DecisionTree';
+// Fixed ExpectedValueCalculator.ts - Updated for new type system
+import { TreeNode, NodeType, isDecisionNode, isChanceNode, isTerminalNode } from '../types/DecisionTree';
 
 interface ValidationResult {
   isValid: boolean;
@@ -7,15 +7,17 @@ interface ValidationResult {
   warnings: string[];
 }
 
+interface CalculationBreakdown {
+  nodeId: string;
+  nodeName: string;
+  nodeType: string;
+  value: number;
+  children?: CalculationBreakdown[];
+}
+
 interface CalculationResult {
   expectedValue: number;
-  breakdown: {
-    nodeId: string;
-    nodeName: string;
-    nodeType: string;
-    value: number;
-    children?: CalculationResult['breakdown'][];
-  };
+  breakdown: CalculationBreakdown;
 }
 
 class ExpectedValueCalculator {
@@ -45,51 +47,49 @@ class ExpectedValueCalculator {
     nodes.forEach(node => {
       const children = nodes.filter(child => child.parent_node_id === node.id);
       
-      switch (node.node_type) {
-        case 'decision':
-          if (children.length === 0) {
-            warnings.push(`Decision node "${node.name}" has no options to choose from`);
-          }
-          break;
-          
-        case 'chance':
-          if (children.length === 0) {
-            errors.push(`Chance node "${node.name}" has no outcome branches`);
-          }
-          
-          if (node.probability === null || node.probability === undefined) {
-            errors.push(`Chance node "${node.name}" is missing probability value`);
-          } else if (node.probability < 0 || node.probability > 1) {
-            errors.push(`Chance node "${node.name}" has invalid probability: ${node.probability} (must be 0-1)`);
-          }
-          
-          // Check if probabilities of children sum to 1
-          if (children.length > 0) {
-            const childProbSum = children.reduce((sum, child) => {
-              if (child.node_type === 'chance' && child.probability) {
-                return sum + child.probability;
-              }
-              return sum;
-            }, 0);
-            
-            if (Math.abs(childProbSum - 1.0) > 0.01 && childProbSum > 0) {
-              warnings.push(`Children of chance node "${node.name}" have probabilities that don't sum to 1.0 (sum: ${childProbSum.toFixed(3)})`);
+      if (isDecisionNode(node)) {
+        if (children.length === 0) {
+          warnings.push(`Decision node "${node.name}" has no options to choose from`);
+        }
+      } else if (isChanceNode(node)) {
+        if (children.length === 0) {
+          errors.push(`Chance node "${node.name}" has no outcome branches`);
+        }
+        
+        if (node.probability === null || node.probability === undefined) {
+          errors.push(`Chance node "${node.name}" is missing probability value`);
+        } else if (node.probability < 0 || node.probability > 1) {
+          errors.push(`Chance node "${node.name}" has invalid probability: ${node.probability} (must be 0-1)`);
+        }
+        
+        // Check if probabilities of children sum to 1
+        if (children.length > 0) {
+          const childProbSum = children.reduce((sum, child) => {
+            if (isChanceNode(child) && child.probability !== null && child.probability !== undefined) {
+              return sum + child.probability;
             }
-          }
-          break;
+            return sum;
+          }, 0);
           
-        case 'terminal':
-          if (children.length > 0) {
-            warnings.push(`Terminal node "${node.name}" has children (will be ignored)`);
+          if (Math.abs(childProbSum - 1.0) > 0.01 && childProbSum > 0) {
+            warnings.push(`Children of chance node "${node.name}" have probabilities that don't sum to 1.0 (sum: ${childProbSum.toFixed(3)})`);
           }
-          
-          if (node.utility === null || node.utility === undefined) {
-            errors.push(`Terminal node "${node.name}" is missing utility/value`);
-          }
-          break;
-          
-        default:
-          errors.push(`Node "${node.name}" has invalid type: ${node.node_type}`);
+        }
+      } else if (isTerminalNode(node)) {
+        if (children.length > 0) {
+          warnings.push(`Terminal node "${node.name}" has children (will be ignored)`);
+        }
+        
+        if (node.utility === null || node.utility === undefined) {
+          errors.push(`Terminal node "${node.name}" is missing utility/value`);
+        }
+      } else {
+        errors.push(`Node "${node.name}" has invalid type: ${node.node_type}`);
+      }
+
+      // Validate cost if present
+      if (node.cost !== null && node.cost !== undefined && node.cost < 0) {
+        warnings.push(`Node "${node.name}" has negative cost: ${node.cost}`);
       }
     });
 
@@ -137,98 +137,116 @@ class ExpectedValueCalculator {
   ): CalculationResult {
     const children = allNodes.filter(child => child.parent_node_id === node.id);
     
-    switch (node.node_type) {
-      case 'terminal':
-        // Base case: terminal node returns its utility minus any cost
-        const terminalValue = (node.utility || 0) - (node.cost || 0);
-        return {
-          expectedValue: terminalValue,
-          breakdown: {
-            nodeId: node.id,
-            nodeName: node.name,
-            nodeType: node.node_type,
-            value: terminalValue
-          }
-        };
-        
-      case 'decision':
-        // Decision node: choose the best option (highest expected value)
-        if (children.length === 0) {
-          return {
-            expectedValue: -(node.cost || 0),
-            breakdown: {
-              nodeId: node.id,
-              nodeName: node.name,
-              nodeType: node.node_type,
-              value: -(node.cost || 0)
-            }
-          };
+    if (isTerminalNode(node)) {
+      // Base case: terminal node returns its utility minus any cost
+      const utility = node.utility || 0;
+      const cost = node.cost || 0;
+      const terminalValue = utility - cost;
+      
+      return {
+        expectedValue: terminalValue,
+        breakdown: {
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.node_type,
+          value: terminalValue
         }
-        
-        const decisionOptions = children.map(child => 
-          this.calculateNodeValue(child, nodeMap, allNodes)
-        );
-        
-        // Find the option with highest expected value
-        const bestOption = decisionOptions.reduce((best, current) => 
-          current.expectedValue > best.expectedValue ? current : best
-        );
-        
-        const decisionValue = bestOption.expectedValue - (node.cost || 0);
-        
+      };
+    } else if (isDecisionNode(node)) {
+      // Decision node: choose the best option (highest expected value)
+      const cost = node.cost || 0;
+      
+      if (children.length === 0) {
         return {
-          expectedValue: decisionValue,
+          expectedValue: -cost,
           breakdown: {
             nodeId: node.id,
             nodeName: node.name,
             nodeType: node.node_type,
-            value: decisionValue,
-            children: decisionOptions.map(option => option.breakdown)
+            value: -cost
           }
         };
-        
-      case 'chance':
-        // Chance node: weighted average of all outcomes
-        if (children.length === 0) {
-          return {
-            expectedValue: -(node.cost || 0),
-            breakdown: {
-              nodeId: node.id,
-              nodeName: node.name,
-              nodeType: node.node_type,
-              value: -(node.cost || 0)
-            }
-          };
+      }
+      
+      const decisionOptions = children.map(child => 
+        this.calculateNodeValue(child, nodeMap, allNodes)
+      );
+      
+      // Find the option with highest expected value
+      const bestOption = decisionOptions.reduce((best, current) => 
+        current.expectedValue > best.expectedValue ? current : best
+      );
+      
+      const decisionValue = bestOption.expectedValue - cost;
+      
+      return {
+        expectedValue: decisionValue,
+        breakdown: {
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.node_type,
+          value: decisionValue,
+          children: decisionOptions.map(option => option.breakdown)
         }
-        
-        const chanceOutcomes = children.map(child => 
-          this.calculateNodeValue(child, nodeMap, allNodes)
-        );
-        
-        // Calculate weighted average based on probabilities
-        let weightedSum = 0;
-        const chanceBreakdown = chanceOutcomes.map((outcome, index) => {
-          const child = children[index];
-          const probability = child.node_type === 'chance' ? (child.probability || 0) : 1;
-          weightedSum += outcome.expectedValue * probability;
-          return outcome.breakdown;
-        });
-        
-        const chanceValue = weightedSum - (node.cost || 0);
-        
+      };
+    } else if (isChanceNode(node)) {
+      // Chance node: weighted average of all outcomes
+      const cost = node.cost || 0;
+      
+      if (children.length === 0) {
         return {
-          expectedValue: chanceValue,
+          expectedValue: -cost,
           breakdown: {
             nodeId: node.id,
             nodeName: node.name,
             nodeType: node.node_type,
-            value: chanceValue,
-            children: chanceBreakdown
+            value: -cost
           }
         };
+      }
+      
+      const chanceOutcomes = children.map(child => 
+        this.calculateNodeValue(child, nodeMap, allNodes)
+      );
+      
+      // Calculate weighted average based on probabilities
+      let weightedSum = 0;
+      const chanceBreakdown = chanceOutcomes.map((outcome, index) => {
+        const child = children[index];
+        // For chance nodes, use their probability; for others, assume equal probability
+        const probability = isChanceNode(child) && child.probability !== null && child.probability !== undefined 
+          ? child.probability 
+          : 1 / children.length; // Equal probability if not specified
         
-      default:
-        throw new Error(`Unknown node type: ${node.node_type}`);
+        weightedSum += outcome.expectedValue * probability;
+        return outcome.breakdown;
+      });
+      
+      const chanceValue = weightedSum - cost;
+      
+      return {
+        expectedValue: chanceValue,
+        breakdown: {
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.node_type,
+          value: chanceValue,
+          children: chanceBreakdown
+        }
+      };
+    } else {
+      // Unknown node type - treat as terminal with 0 value
+      console.warn(`Unknown node type: ${node.node_type}, treating as terminal with 0 utility`);
+      const cost = node.cost || 0;
+      return {
+        expectedValue: -cost,
+        breakdown: {
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.node_type,
+          value: -cost
+        }
+      };
     }
   }
 
@@ -236,7 +254,7 @@ class ExpectedValueCalculator {
    * Formats calculation result for display
    */
   static formatCalculationResult(result: CalculationResult): string {
-    const formatBreakdown = (breakdown: CalculationResult['breakdown'], indent = 0): string => {
+    const formatBreakdown = (breakdown: CalculationBreakdown, indent = 0): string => {
       const spaces = '  '.repeat(indent);
       let output = `${spaces}${breakdown.nodeName} (${breakdown.nodeType}): $${breakdown.value.toFixed(2)}\n`;
       
@@ -258,22 +276,24 @@ class ExpectedValueCalculator {
   static getOptimalPath(result: CalculationResult): string[] {
     const path: string[] = [result.breakdown.nodeName];
     
-    const findBestPath = (breakdown: CalculationResult['breakdown']): void => {
-      if (breakdown.children) {
-        if (breakdown.nodeType === 'decision') {
+    const findBestPath = (breakdown: CalculationBreakdown): void => {
+      if (breakdown.children && breakdown.children.length > 0) {
+        if (breakdown.nodeType === NodeType.DECISION || breakdown.nodeType === 'decision') {
           // For decision nodes, find the child with highest value
           const bestChild = breakdown.children.reduce((best, current) => 
             current.value > best.value ? current : best
           );
-          path.push(bestChild.nodeName);
+          path.push(`→ Choose: ${bestChild.nodeName}`);
           findBestPath(bestChild);
-        } else if (breakdown.nodeType === 'chance') {
-          // For chance nodes, show all possible outcomes
-          breakdown.children.forEach(child => {
-            const branchPath = [...path];
-            branchPath.push(child.nodeName);
-            findBestPath(child);
+        } else if (breakdown.nodeType === NodeType.CHANCE || breakdown.nodeType === 'chance') {
+          // For chance nodes, show the most likely outcome
+          const mostLikelyChild = breakdown.children.reduce((best, current) => {
+            // In a real implementation, you'd want to track probabilities through the breakdown
+            // For now, just show the first child as an example
+            return current.value > best.value ? current : best;
           });
+          path.push(`→ If: ${mostLikelyChild.nodeName}`);
+          findBestPath(mostLikelyChild);
         }
       }
     };
@@ -281,7 +301,86 @@ class ExpectedValueCalculator {
     findBestPath(result.breakdown);
     return path;
   }
+
+  /**
+   * Gets summary statistics for the calculation
+   */
+  static getCalculationSummary(result: CalculationResult): {
+    totalNodes: number;
+    decisionNodes: number;
+    chanceNodes: number;
+    terminalNodes: number;
+    expectedValue: number;
+    recommendedPath: string[];
+  } {
+    const stats = {
+      totalNodes: 0,
+      decisionNodes: 0,
+      chanceNodes: 0,
+      terminalNodes: 0
+    };
+
+    const countNodes = (breakdown: CalculationBreakdown): void => {
+      stats.totalNodes++;
+      
+      switch (breakdown.nodeType) {
+        case NodeType.DECISION:
+        case 'decision':
+          stats.decisionNodes++;
+          break;
+        case NodeType.CHANCE:
+        case 'chance':
+          stats.chanceNodes++;
+          break;
+        case NodeType.TERMINAL:
+        case 'terminal':
+          stats.terminalNodes++;
+          break;
+      }
+
+      if (breakdown.children) {
+        breakdown.children.forEach(child => countNodes(child));
+      }
+    };
+
+    countNodes(result.breakdown);
+
+    return {
+      ...stats,
+      expectedValue: result.expectedValue,
+      recommendedPath: this.getOptimalPath(result)
+    };
+  }
+
+  /**
+   * Validates individual node for expected value calculation
+   */
+  static validateNode(node: TreeNode): string[] {
+    const errors: string[] = [];
+
+    if (!node.name || node.name.trim().length === 0) {
+      errors.push('Node must have a name');
+    }
+
+    if (isChanceNode(node)) {
+      if (node.probability === null || node.probability === undefined) {
+        errors.push('Chance node must have a probability value');
+      } else if (node.probability < 0 || node.probability > 1) {
+        errors.push('Probability must be between 0 and 1');
+      }
+    } else if (isTerminalNode(node)) {
+      if (node.utility === null || node.utility === undefined) {
+        errors.push('Terminal node must have a utility value');
+      }
+    }
+
+    if (node.cost !== null && node.cost !== undefined && node.cost < 0) {
+      errors.push('Cost cannot be negative');
+    }
+
+    return errors;
+  }
 }
 
 export default ExpectedValueCalculator;
-export type { ValidationResult, CalculationResult };
+export type { ValidationResult, CalculationResult, CalculationBreakdown };

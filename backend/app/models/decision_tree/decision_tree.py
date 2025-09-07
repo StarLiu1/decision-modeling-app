@@ -1,4 +1,4 @@
-# backend/app/models/decision_tree.py
+# Fixed backend/app/models/decision_tree/decision_tree.py
 from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, ForeignKey, Text, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -65,8 +65,8 @@ class TreeNode(Base):
     __tablename__ = "tree_nodes"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tree_id = Column(UUID(as_uuid=True), ForeignKey("decision_trees.id"), nullable=False)
-    parent_node_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id"))
+    tree_id = Column(UUID(as_uuid=True), ForeignKey("decision_trees.id", ondelete="CASCADE"), nullable=False)
+    parent_node_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id", ondelete="CASCADE"))
     
     # Node properties
     node_type = Column(String(50), nullable=False)  # decision, chance, terminal
@@ -82,7 +82,7 @@ class TreeNode(Base):
     position_x = Column(Integer, default=0)
     position_y = Column(Integer, default=0)
     
-    # Additional node_metadata
+    # Additional node metadata
     node_metadata = Column(JSON)  # Flexible storage for node-specific data
     
     # Relationships
@@ -111,15 +111,15 @@ class TreeNode(Base):
         """Validate node data based on type"""
         errors = []
         
-        if self.node_type == NodeType.CHANCE:
+        if self.node_type == NodeType.CHANCE.value:
             if self.probability is None or not (0 <= self.probability <= 1):
                 errors.append("Chance nodes must have probability between 0 and 1")
                 
-        elif self.node_type == NodeType.TERMINAL:
+        elif self.node_type == NodeType.TERMINAL.value:
             if self.utility is None:
                 errors.append("Terminal nodes must have a utility value")
                 
-        elif self.node_type == NodeType.DECISION:
+        elif self.node_type == NodeType.DECISION.value:
             # Decision nodes just need children
             pass
             

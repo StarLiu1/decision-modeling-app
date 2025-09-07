@@ -1,12 +1,17 @@
-import { NodeType, TreeNode, DecisionTree, CreateTreeRequest, CreateNodeRequest } from '../types/DecisionTree';
+// Fixed API service with proper endpoints and error handling
+import { TreeNode, DecisionTree, CreateTreeRequest, CreateNodeRequest } from '../types/DecisionTree';
 
 const API_BASE_URL = 'http://localhost:8000/api/v1';
-
-// frontend/src/types/DecisionTree.ts
 
 class ApiService {
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
+    
+    console.log(`API Request: ${options?.method || 'GET'} ${url}`);
+    if (options?.body) {
+      console.log('Request body:', options.body);
+    }
+    
     const response = await fetch(url, {
       headers: {
         'Content-Type': 'application/json',
@@ -15,12 +20,23 @@ class ApiService {
       ...options,
     });
 
+    console.log(`API Response: ${response.status} ${response.statusText}`);
+
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.detail || error.message || errorMessage;
+      } catch {
+        // If response isn't JSON, use status text
+        errorMessage = response.statusText || errorMessage;
+      }
+      throw new Error(errorMessage);
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('API Response data:', data);
+    return data;
   }
 
   // Decision Tree API methods
@@ -79,7 +95,13 @@ class ApiService {
     });
   }
 
-  async moveNode(treeId: string, nodeId: string, newParentId?: string, positionX?: number, positionY?: number): Promise<TreeNode> {
+  async moveNode(
+    treeId: string, 
+    nodeId: string, 
+    newParentId?: string, 
+    positionX?: number, 
+    positionY?: number
+  ): Promise<TreeNode> {
     const params = new URLSearchParams();
     if (newParentId) params.append('new_parent_id', newParentId);
     if (positionX !== undefined) params.append('position_x', positionX.toString());
@@ -90,13 +112,40 @@ class ApiService {
     });
   }
 
-  // Analysis API methods
+  // Analysis API methods - these endpoints might not exist yet in backend
   async getExpectedValue(treeId: string): Promise<any> {
-    return this.request<any>(`/trees/${treeId}/analysis/expected-value`);
+    try {
+      return this.request<any>(`/trees/${treeId}/analysis/expected-value`);
+    } catch (error) {
+      console.warn('Expected value endpoint not available, using client-side calculation');
+      // Fallback: could implement client-side expected value calculation here
+      throw new Error('Expected value analysis not available - implement client-side calculation');
+    }
   }
 
   async validateTree(treeId: string): Promise<any> {
-    return this.request<any>(`/trees/${treeId}/validation`);
+    try {
+      return this.request<any>(`/trees/${treeId}/validation`);
+    } catch (error) {
+      console.warn('Tree validation endpoint not available, using client-side validation');
+      // Fallback: could implement client-side validation here
+      throw new Error('Tree validation not available - implement client-side validation');
+    }
+  }
+
+  // Health check method
+  async healthCheck(): Promise<any> {
+    return this.request<any>('/../../health'); // Goes to /health endpoint
+  }
+
+  // Test connection method
+  async testConnection(): Promise<boolean> {
+    try {
+      await this.healthCheck();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

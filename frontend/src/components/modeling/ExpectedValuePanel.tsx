@@ -38,8 +38,12 @@ const ExpectedValuePanel: React.FC<ExpectedValuePanelProps> = ({ tree }) => {
     
     // Simulate async calculation (in case we want to add loading state)
     setTimeout(() => {
-      const result = ExpectedValueCalculator.calculateExpectedValue(tree.nodes);
-      setCalculation(result);
+      const result = ExpectedValueCalculator.calculateExpectedValue(tree.nodes!);
+      if (result) {
+        setCalculation(result);
+      } else {
+        setCalculation(null);
+      }
       setIsCalculating(false);
     }, 100);
   };
