@@ -11,6 +11,9 @@ venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Package lock
+frontend/package-lock.json
+
 # IDE
 .vscode/settings.json
 .idea/

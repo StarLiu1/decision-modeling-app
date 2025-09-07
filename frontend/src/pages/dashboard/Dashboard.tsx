@@ -15,7 +15,7 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     // Test API connection
-    fetch('http://localhost:8000/api/v1/models')
+    fetch('http://localhost:8000/api/v1/trees')
       .then(response => response.json())
       .then(data => {
         setModels(data.models)

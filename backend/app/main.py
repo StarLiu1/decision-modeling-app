@@ -1,11 +1,15 @@
-# backend/app/__init__.py
-# This file makes the app directory a Python package
-
-# backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from sqlalchemy import create_engine
 import os
+
+from app.core.config import settings
+from app.core.database import engine
+from app.models.decision_tree.decision_tree import Base
+from app.api.v1.api import api_router  # ✅ CORRECT
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
 # Create FastAPI instance
 app = FastAPI(
@@ -25,53 +29,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include API routes
+app.include_router(api_router, prefix=settings.api_v1_prefix)
+
 # Health check endpoint
 @app.get("/")
 async def root():
-    return {"message": "Decision Modeling API is running!", "version": "1.0.0"}
+    return {
+        "message": "Decision Modeling API is running!", 
+        "version": "1.0.0",
+        "docs": "/docs",
+        "api": settings.api_v1_prefix
+    }
 
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
-        "database": "connected",  # Will implement actual checks later
-        "redis": "connected",
-        "services": ["postgresql", "redis", "fastapi"]
-    }
-
-# API v1 routes (placeholder for now)
-@app.get("/api/v1/")
-async def api_v1_root():
-    return {"message": "API v1 is ready", "endpoints": ["/models", "/auth", "/analysis"]}
-
-# Temporary endpoints for testing
-@app.get("/api/v1/models")
-async def get_models():
-    return {
-        "models": [
-            {
-                "id": "1",
-                "name": "Sample Decision Tree",
-                "description": "A basic decision tree example",
-                "created_at": "2025-09-06T19:23:00Z"
-            }
-        ]
-    }
-
-@app.get("/api/v1/models/{model_id}")
-async def get_model(model_id: str):
-    return {
-        "id": model_id,
-        "name": f"Decision Tree {model_id}",
-        "description": "Sample model for testing",
-        "nodes": [
-            {
-                "id": "root",
-                "type": "decision",
-                "name": "Root Decision",
-                "children": []
-            }
-        ]
+        "database": "connected",
+        "redis": "available",
+        "services": ["postgresql", "redis", "fastapi"],
+        "endpoints": {
+            "trees": f"{settings.api_v1_prefix}/trees",
+            "docs": "/docs"
+        }
     }
 
 if __name__ == "__main__":
