@@ -1,4 +1,4 @@
-# Corrected backend/app/services/tree_analysis_service.py - Aligned with frontend calculator logic
+# Fixed backend/app/services/tree_analysis_service.py - Aligned with corrected frontend logic
 from typing import Dict, List, Any, Optional
 import networkx as nx
 from app.models.decision_tree.decision_tree import DecisionTree, TreeNode, NodeType
@@ -7,12 +7,33 @@ class TreeAnalysisService:
     """Service for analyzing decision trees with proper expected value calculation"""
     
     @staticmethod
+    def is_choice_node(node: TreeNode, all_nodes: List[TreeNode]) -> bool:
+        """
+        Helper function to determine if a chance node is a "choice node"
+        (direct child of a decision node - represents a choice option)
+        """
+        if node.node_type != "chance" or not node.parent_node_id:
+            return False
+        
+        parent = next((n for n in all_nodes if n.id == node.parent_node_id), None)
+        return parent and parent.node_type == "decision"
+    
+    @staticmethod
+    def is_uncertain_event(node: TreeNode, all_nodes: List[TreeNode]) -> bool:
+        """
+        Helper function to determine if a chance node is an "uncertain event"
+        (has uncertainty with probability, not a choice)
+        """
+        return node.node_type == "chance" and not TreeAnalysisService.is_choice_node(node, all_nodes)
+    
+    @staticmethod
     def calculate_expected_value(tree: DecisionTree) -> Dict[str, Any]:
         """
         Calculate expected values for all nodes in the tree using proper recursive algorithm
         EV calculation rules:
         - Terminal nodes: EV = utility - cost
-        - Chance nodes: EV = Σ(probability_i × EV_child_i) - cost
+        - Choice nodes (chance under decision): EV = weighted average of outcomes using children's probabilities
+        - Uncertain events (chance with probability): EV = pass through, parent uses probability for weighting  
         - Decision nodes: EV = max(EV_child_i) - cost
         """
         if not tree.nodes:
@@ -88,7 +109,10 @@ class TreeAnalysisService:
                     }
                     
             elif node.node_type == "chance":
-                # Chance node: Σ(probability_i × EV_child_i) - cost
+                # Chance node: behavior depends on context
+                is_choice = TreeAnalysisService.is_choice_node(node, tree.nodes)
+                is_uncertain = TreeAnalysisService.is_uncertain_event(node, tree.nodes)
+                
                 if not children:
                     ev = -cost
                     calculation_breakdown[node_id] = {
@@ -96,23 +120,60 @@ class TreeAnalysisService:
                         "calculation": f"EV = 0 (no outcomes) - {cost} (cost) = {ev}",
                         "cost": cost
                     }
-                else:
+                elif is_choice:
+                    # Choice node: Calculate weighted average using children's probabilities
                     weighted_sum = 0
                     calculation_steps = []
                     
                     for child in children:
                         child_ev = calculate_node_ev(child)
-                        probability = child.probability or 0
-                        contribution = probability * child_ev
-                        weighted_sum += contribution
-                        calculation_steps.append(f"{probability} × {child_ev:.2f} = {contribution:.2f}")
+                        if TreeAnalysisService.is_uncertain_event(child, tree.nodes):
+                            # Child is uncertain event with probability
+                            probability = child.probability or 0
+                            contribution = probability * child_ev
+                            weighted_sum += contribution
+                            calculation_steps.append(f"{probability} × {child_ev:.2f} = {contribution:.2f}")
+                        else:
+                            # Child is terminal or other - direct value
+                            weighted_sum += child_ev
+                            calculation_steps.append(f"{child_ev:.2f}")
                     
                     ev = weighted_sum - cost
                     calculation_breakdown[node_id] = {
-                        "type": "chance",
+                        "type": "chance_choice",
                         "calculation": f"EV = ({' + '.join(calculation_steps)}) - {cost} (cost) = {ev:.2f}",
                         "cost": cost,
                         "weighted_sum": weighted_sum
+                    }
+                    
+                elif is_uncertain:
+                    # Uncertain event: Pass through to children, parent uses our probability
+                    if len(children) == 1:
+                        child_value = calculate_node_ev(children[0])
+                    else:
+                        # Multiple children under uncertain event - average them
+                        child_values = [calculate_node_ev(child) for child in children]
+                        child_value = sum(child_values) / len(child_values)
+                    
+                    ev = child_value - cost
+                    probability = node.probability or 0
+                    
+                    calculation_breakdown[node_id] = {
+                        "type": "chance_uncertain",
+                        "calculation": f"EV = {child_value:.2f} (from children) - {cost} (cost) = {ev:.2f}",
+                        "probability": probability,
+                        "cost": cost
+                    }
+                else:
+                    # Fallback for unclassified chance nodes
+                    child_values = [calculate_node_ev(child) for child in children]
+                    avg_value = sum(child_values) / len(child_values) if child_values else 0
+                    ev = avg_value - cost
+                    
+                    calculation_breakdown[node_id] = {
+                        "type": "chance_fallback",
+                        "calculation": f"EV = {avg_value:.2f} (average) - {cost} (cost) = {ev:.2f}",
+                        "cost": cost
                     }
             else:
                 # Unknown node type
@@ -134,7 +195,7 @@ class TreeAnalysisService:
             "node_expected_values": expected_values,
             "calculation_breakdown": calculation_breakdown,
             "analysis_complete": True,
-            "calculation_method": "recursive",
+            "calculation_method": "recursive_corrected",
             "root_node_id": str(root_node.id)
         }
     
@@ -142,7 +203,7 @@ class TreeAnalysisService:
     def validate_tree_structure(tree: DecisionTree) -> Dict[str, Any]:
         """
         Validate the tree structure for expected value calculation readiness
-        Uses the same validation logic as the frontend
+        Uses the corrected validation logic matching the frontend
         """
         issues = []
         warnings = []
@@ -177,7 +238,7 @@ class TreeAnalysisService:
             parent = parent_map.get(node.id)
             
             if node.node_type == "terminal":
-                # Terminal nodes must have utility values
+                # Terminal nodes must have utility values, never probabilities
                 if node.utility is None:
                     issues.append(f"Terminal node '{node.name}' is missing utility value")
                 
@@ -185,55 +246,61 @@ class TreeAnalysisService:
                 if children:
                     warnings.append(f"Terminal node '{node.name}' has children (they will be ignored)")
                 
-                # Terminal nodes that are children of chance nodes need probabilities
-                if parent and parent.node_type == "chance":
-                    if node.probability is None:
-                        issues.append(f"Terminal node '{node.name}' needs probability (child of chance node '{parent.name}')")
-                    elif not (0 <= node.probability <= 1):
-                        issues.append(f"Terminal node '{node.name}' has invalid probability: {node.probability} (must be 0-1)")
-                elif parent and parent.node_type == "decision":
-                    if node.probability is not None:
-                        warnings.append(f"Terminal node '{node.name}' has probability but is not child of chance node")
+                # Terminal nodes should not have probabilities
+                if node.probability is not None:
+                    issues.append(f"Terminal node '{node.name}' should not have probability - probabilities belong on uncertain chance nodes")
                         
             elif node.node_type == "chance":
-                # Chance nodes must have children
-                if not children:
-                    issues.append(f"Chance node '{node.name}' has no children - cannot calculate expected value")
+                # Determine if this is a choice or uncertain event
+                is_choice = TreeAnalysisService.is_choice_node(node, tree.nodes)
+                is_uncertain = TreeAnalysisService.is_uncertain_event(node, tree.nodes)
                 
-                # Context-aware probability validation
-                if parent and parent.node_type == "chance":
-                    # Chance nodes that are children of other chance nodes need probabilities
-                    if node.probability is None:
-                        issues.append(f"Chance node '{node.name}' needs probability (child of chance node '{parent.name}')")
-                    elif not (0 <= node.probability <= 1):
-                        issues.append(f"Chance node '{node.name}' has invalid probability: {node.probability} (must be 0-1)")
-                elif parent and parent.node_type == "decision":
-                    # Chance nodes that are children of decision nodes don't need probabilities (they're choices)
+                if is_choice:
+                    # Choice nodes (children of decisions)
                     if node.probability is not None:
-                        warnings.append(f"Chance node '{node.name}' has probability but represents a choice (probability not needed)")
-                
-                # Chance nodes should not have utility
-                if node.utility is not None:
-                    warnings.append(f"Chance node '{node.name}' has utility but chance nodes should not have utilities")
-                
-                # Validate that children of chance nodes have probabilities that sum to 1
-                if children:
-                    total_probability = 0
-                    missing_probabilities = 0
+                        warnings.append(f"Choice node '{node.name}' has probability but choice options don't need probabilities")
                     
-                    for child in children:
-                        if child.probability is None:
-                            missing_probabilities += 1
-                            issues.append(f"Child '{child.name}' of chance node '{node.name}' is missing probability")
-                        else:
-                            if not (0 <= child.probability <= 1):
-                                issues.append(f"Child '{child.name}' has invalid probability: {child.probability} (must be 0-1)")
-                            total_probability += child.probability
+                    if node.utility is not None:
+                        warnings.append(f"Choice node '{node.name}' has utility but choice options don't have utilities")
                     
-                    # Check probability sum (only if no missing probabilities)
-                    if missing_probabilities == 0 and abs(total_probability - 1.0) > 0.001:
-                        issues.append(f"Children of chance node '{node.name}' have probabilities that sum to {total_probability:.3f}, should sum to 1.0")
+                    # Choice nodes should have children
+                    if not children:
+                        issues.append(f"Choice node '{node.name}' has no outcomes - choices must lead somewhere")
                         
+                elif is_uncertain:
+                    # Uncertain event nodes
+                    if node.probability is None:
+                        issues.append(f"Uncertain event '{node.name}' is missing probability value")
+                    elif not (0 <= node.probability <= 1):
+                        issues.append(f"Uncertain event '{node.name}' has invalid probability: {node.probability} (must be 0-1)")
+                    
+                    if node.utility is not None:
+                        warnings.append(f"Uncertain event '{node.name}' has utility but uncertain events should not have utilities")
+                    
+                    # Uncertain events should have children
+                    if not children:
+                        issues.append(f"Uncertain event '{node.name}' has no outcomes")
+                
+                # For uncertain events with multiple uncertain children, validate probability sums
+                if is_uncertain and len(children) > 1:
+                    uncertain_children = [child for child in children if TreeAnalysisService.is_uncertain_event(child, tree.nodes)]
+                    if len(uncertain_children) > 1:
+                        total_probability = 0
+                        missing_probabilities = 0
+                        
+                        for child in uncertain_children:
+                            if child.probability is None:
+                                missing_probabilities += 1
+                                issues.append(f"Uncertain event '{child.name}' under '{node.name}' is missing probability")
+                            else:
+                                if not (0 <= child.probability <= 1):
+                                    issues.append(f"Uncertain event '{child.name}' has invalid probability: {child.probability}")
+                                total_probability += child.probability
+                        
+                        # Check probability sum (only if no missing probabilities)
+                        if missing_probabilities == 0 and abs(total_probability - 1.0) > 0.001:
+                            issues.append(f"Uncertain events under '{node.name}' have probabilities that sum to {total_probability:.3f}, should sum to 1.0")
+                            
             elif node.node_type == "decision":
                 # Decision nodes should have children (choices)
                 if not children:
@@ -244,11 +311,6 @@ class TreeAnalysisService:
                     warnings.append(f"Decision node '{node.name}' has probability but decisions don't have probabilities")
                 if node.utility is not None:
                     warnings.append(f"Decision node '{node.name}' has utility but decisions don't have utilities")
-                
-                # Warn if decision node has non-chance children (unusual structure)
-                non_chance_children = [child for child in children if child.node_type != "chance"]
-                if non_chance_children:
-                    warnings.append(f"Decision node '{node.name}' has non-chance children - this is unusual in decision trees")
             
             # Validate cost (should not be negative)
             if node.cost is not None and node.cost < 0:
@@ -317,31 +379,47 @@ class TreeAnalysisService:
                 build_path(best_child, depth + 2)
                 
             elif node.node_type == "chance" and children:
-                # For chance nodes, show all possible outcomes
-                path.append({
-                    "step": len(path) + 1,
-                    "action": "Possible outcomes:",
-                    "depth": depth + 1
-                })
+                # Show the structure of chance nodes
+                is_choice = TreeAnalysisService.is_choice_node(node, tree.nodes)
                 
-                for child in children:
-                    probability = (child.probability or 0) * 100
-                    child_ev = expected_values.get(str(child.id), 0)
+                if is_choice:
                     path.append({
                         "step": len(path) + 1,
-                        "action": f"• {child.name} ({probability:.1f}% chance, EV: {child_ev:.2f})",
-                        "depth": depth + 2
-                    })
-                
-                # Continue with most likely outcome
-                most_likely_child = max(children, key=lambda child: child.probability or 0)
-                if most_likely_child.node_type != "terminal":
-                    path.append({
-                        "step": len(path) + 1,
-                        "action": f"Most likely path continues with: {most_likely_child.name}",
+                        "action": "Choice outcomes:",
                         "depth": depth + 1
                     })
-                    build_path(most_likely_child, depth + 2)
+                else:
+                    path.append({
+                        "step": len(path) + 1,
+                        "action": "Uncertain outcomes:",
+                        "depth": depth + 1
+                    })
+                
+                for child in children:
+                    child_ev = expected_values.get(str(child.id), 0)
+                    if child.probability is not None:
+                        probability = child.probability * 100
+                        path.append({
+                            "step": len(path) + 1,
+                            "action": f"• {child.name} ({probability:.1f}% chance, EV: {child_ev:.2f})",
+                            "depth": depth + 2
+                        })
+                    else:
+                        path.append({
+                            "step": len(path) + 1,
+                            "action": f"• {child.name} (EV: {child_ev:.2f})",
+                            "depth": depth + 2
+                        })
+                
+                # Continue with best outcome
+                best_child = max(children, key=lambda child: expected_values.get(str(child.id), 0))
+                if best_child.node_type != "terminal":
+                    path.append({
+                        "step": len(path) + 1,
+                        "action": f"Best path continues with: {best_child.name}",
+                        "depth": depth + 1
+                    })
+                    build_path(best_child, depth + 2)
         
         build_path(root_nodes[0])
         

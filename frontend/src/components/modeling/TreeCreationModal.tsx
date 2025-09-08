@@ -1,4 +1,4 @@
-// Corrected TreeCreationModal.tsx - Updated for proper decision tree structure
+// Fixed TreeCreationModal.tsx - Updated for correct decision tree structure guidance
 import React, { useState } from 'react';
 import { CreateTreeRequest, NodeType } from '../../types/DecisionTree';
 
@@ -37,12 +37,9 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
         newErrors.rootNodeName = 'Root node name is required';
       }
 
-      // Root node validation - should typically be a decision node
-      if (formData.rootNodeType === 'chance') {
-        // Warn but allow chance root nodes
-        // Note: This would be unusual but not necessarily invalid
-      } else if (formData.rootNodeType === 'terminal') {
-        newErrors.rootNodeType = 'Root node should not be terminal (tree would have only one node)';
+      // Root node validation - typically should be a decision node
+      if (formData.rootNodeType === 'terminal') {
+        newErrors.rootNodeType = 'Root node should not be terminal (tree would have only one outcome)';
       }
     }
 
@@ -68,10 +65,10 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
           node_type: formData.rootNodeType as NodeType,
           position_x: 100,
           position_y: 100
-          // Note: Root nodes typically don't need probability or utility
-          // - Decision root: No probability/utility (will have choice children)
-          // - Chance root: No probability (will have outcome children with probabilities)
-          // - Terminal root: Would need utility but this creates a trivial tree
+          // Note: Root nodes typically don't need probability or utility initially
+          // - Decision root: Will have choice children
+          // - Chance root: Will have outcome children  
+          // - Terminal root: Would need utility but creates trivial tree
         };
       }
 
@@ -107,7 +104,7 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
       rootNodeType: newType,
       // Update root node name to match type
       rootNodeName: newType === 'decision' ? 'Root Decision' :
-                    newType === 'chance' ? 'Root Chance' :
+                    newType === 'chance' ? 'Root Event' :
                     'Root Outcome'
     }));
   };
@@ -118,28 +115,38 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
         return {
           icon: '□',
           color: 'text-blue-600',
-          description: 'A choice point where you decide between options',
-          recommendation: 'Recommended for most decision trees',
-          example: 'e.g., "Treatment Decision", "Investment Choice"'
+          description: 'A choice point where you decide between alternatives',
+          recommendation: '✅ Recommended - Most trees start with a decision',
+          example: 'e.g., "Treatment Decision", "Investment Choice"',
+          nextSteps: 'Will typically have choice options (chance nodes) as children'
         };
       case 'chance':
         return {
           icon: '○',
-          color: 'text-red-600',
-          description: 'An uncertain event with multiple outcomes',
-          recommendation: 'Less common as root node',
-          example: 'e.g., "Market Conditions", "Weather Outcome"'
+          color: 'text-red-600', 
+          description: 'An uncertain event or choice option',
+          recommendation: '⚠️ Less common as root - Usually a child of decisions',
+          example: 'e.g., "Market Conditions", "Initial Event"',
+          nextSteps: 'Will have uncertain events or outcomes as children'
         };
       case 'terminal':
         return {
           icon: '◊',
           color: 'text-green-600',
           description: 'An endpoint with a final outcome',
-          recommendation: 'Not recommended (creates trivial tree)',
-          example: 'Would create a tree with only one outcome'
+          recommendation: '❌ Not recommended - Creates single-outcome tree',
+          example: 'Would create a tree with only one result',
+          nextSteps: 'Cannot have children - tree would be complete'
         };
       default:
-        return { icon: '?', color: 'text-gray-600', description: 'Unknown node type', recommendation: '', example: '' };
+        return { 
+          icon: '?', 
+          color: 'text-gray-600', 
+          description: 'Unknown node type', 
+          recommendation: '', 
+          example: '',
+          nextSteps: ''
+        };
     }
   };
 
@@ -147,7 +154,7 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-semibold">Create New Decision Tree</h2>
           <button
@@ -244,8 +251,10 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
                       const isDiscouraged = type === 'terminal';
                       
                       return (
-                        <label key={type} className={`flex items-start p-3 border rounded-lg cursor-pointer transition-colors ${
-                          formData.rootNodeType === type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                        <label key={type} className={`flex items-start p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                          formData.rootNodeType === type 
+                            ? 'border-blue-500 bg-blue-50 shadow-sm' 
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                         } ${isDiscouraged ? 'opacity-75' : ''}`}>
                           <input
                             type="radio"
@@ -256,24 +265,20 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
                             className="mr-3 mt-1"
                             disabled={isLoading}
                           />
-                          <span className={`text-lg mr-3 ${info.color}`}>{info.icon}</span>
+                          <span className={`text-xl mr-3 ${info.color}`}>{info.icon}</span>
                           <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium capitalize">{type}</span>
-                              {isRecommended && (
-                                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">
-                                  Recommended
-                                </span>
-                              )}
-                              {isDiscouraged && (
-                                <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded">
-                                  Not Recommended
-                                </span>
-                              )}
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium capitalize text-lg">{type}</span>
                             </div>
-                            <div className="text-sm text-gray-600 mt-1">{info.description}</div>
-                            <div className="text-xs text-gray-500 mt-1">{info.recommendation}</div>
-                            <div className="text-xs text-blue-600 mt-1">{info.example}</div>
+                            <div className="text-sm text-gray-600 mb-1">{info.description}</div>
+                            <div className={`text-xs font-medium mb-1 ${
+                              isRecommended ? 'text-green-700' : 
+                              isDiscouraged ? 'text-red-700' : 'text-yellow-700'
+                            }`}>
+                              {info.recommendation}
+                            </div>
+                            <div className="text-xs text-blue-600 mb-1">{info.example}</div>
+                            <div className="text-xs text-gray-500">{info.nextSteps}</div>
                           </div>
                         </label>
                       );
@@ -282,17 +287,44 @@ const TreeCreationModal: React.FC<TreeCreationModalProps> = ({
                   {errors.rootNodeType && <p className="text-red-500 text-xs mt-1">{errors.rootNodeType}</p>}
                 </div>
 
-                {/* Explanatory Text */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                {/* UPDATED Decision Tree Structure Guide */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <div className="text-sm text-blue-800">
-                    <div className="font-medium mb-1">💡 Decision Tree Structure Guide:</div>
-                    <ul className="text-xs space-y-1 list-disc list-inside">
-                      <li><strong>Decision nodes</strong> represent choices you can make</li>
-                      <li><strong>Chance nodes</strong> represent uncertain events or outcomes</li>
-                      <li><strong>Terminal nodes</strong> represent final payoffs or results</li>
-                    </ul>
-                    <div className="mt-2 text-xs">
-                      <strong>Typical structure:</strong> Decision → Chance (choices) → Terminal (outcomes)
+                    <div className="font-medium mb-2">💡 Decision Tree Structure Guide:</div>
+                    
+                    <div className="space-y-2 text-xs">
+                      <div className="font-medium text-blue-900">Common Structures:</div>
+                      
+                      <div className="pl-2">
+                        <div><strong>Decision → Choice Options → Uncertain Events → Outcomes</strong></div>
+                        <div className="text-blue-600 ml-2">
+                          Decision (□) → Choice A (○, no probability) → Event A1 (○, probability) → Result (◊, utility)
+                        </div>
+                      </div>
+                      
+                      <div className="pl-2">
+                        <div><strong>Decision → Direct Outcomes</strong></div>
+                        <div className="text-blue-600 ml-2">
+                          Decision (□) → Outcome A (◊, utility)
+                        </div>
+                      </div>
+                      
+                      <div className="pl-2">
+                        <div><strong>Uncertain Event → Multiple Outcomes</strong></div>
+                        <div className="text-blue-600 ml-2">
+                          Event (○, probability) → Outcome A (◊, utility)
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-3 pt-2 border-t border-blue-200">
+                      <div className="font-medium text-blue-900 mb-1">Key Principles:</div>
+                      <ul className="text-xs space-y-1 list-disc list-inside ml-2">
+                        <li><strong>Choice options</strong> (under decisions) don't need probabilities</li>
+                        <li><strong>Uncertain events</strong> need probabilities (0.0 to 1.0)</li>
+                        <li><strong>Final outcomes</strong> need utility values</li>
+                        <li><strong>Probabilities of uncertain events</strong> under the same parent should sum to 1.0</li>
+                      </ul>
                     </div>
                   </div>
                 </div>

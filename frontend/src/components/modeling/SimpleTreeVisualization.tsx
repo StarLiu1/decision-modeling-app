@@ -1,4 +1,4 @@
-// Enhanced SimpleTreeVisualization.tsx with corrected node addition logic
+// Fixed SimpleTreeVisualization.tsx - Correct decision tree structure logic
 import React from 'react';
 import { DecisionTree, TreeNode } from '../../types/DecisionTree';
 
@@ -77,18 +77,44 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
     return styles;
   };
 
-  // FIXED: Correct logic for what types of children a node can have
+  // CORRECTED: Proper logic for what types of children a node can have
   const getValidChildTypes = (nodeType: string): ('decision' | 'chance' | 'terminal')[] => {
     switch (nodeType) {
       case 'decision':
-        return ['chance', 'terminal']; // Decision nodes can have chance OR terminal children
+        // Decision nodes can have chance children (choices) 
+        // In rare cases, they might have direct terminal children for simple decisions
+        return ['chance', 'terminal']; 
       case 'chance':
-        return ['chance', 'terminal']; // Chance nodes can have chance OR terminal children
+        // Chance nodes can have:
+        // - More chance children (for nested uncertain events)
+        // - Terminal children (for final outcomes)
+        return ['chance', 'terminal']; 
       case 'terminal':
-        return []; // Terminal nodes cannot have children
+        // Terminal nodes cannot have children
+        return []; 
       default:
         return [];
     }
+  };
+
+  // Helper to determine if a chance node is a "choice" (child of decision)
+  const isChoiceNode = (node: any, allNodes: TreeNode[]): boolean => {
+    if (node.node_type !== 'chance' || !node.parent_node_id) return false;
+    const parent = allNodes.find(n => n.id === node.parent_node_id);
+    return parent?.node_type === 'decision';
+  };
+
+  // Helper to get descriptive text for node context
+  const getNodeContextDescription = (node: any, allNodes: TreeNode[]): string => {
+    if (node.node_type === 'chance') {
+      const isChoice = isChoiceNode(node, tree.nodes || []);
+      if (isChoice) {
+        return 'Choice option (no probability)';
+      } else {
+        return 'Uncertain event (needs probability)';
+      }
+    }
+    return '';
   };
 
   // Check if node can have children added
@@ -107,6 +133,7 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
     const styles = getNodeStyles(node, isSelected);
     const hasChildren = node.children && node.children.length > 0;
     const validChildTypes = getValidChildTypes(node.node_type);
+    const contextDescription = getNodeContextDescription(node, tree.nodes || []);
     
     return (
       <div key={node.id} className="flex flex-col items-center">
@@ -262,20 +289,20 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
         </div>
       </div>
       
-      {/* UPDATED Legend */}
+      {/* CORRECTED Legend */}
       <div className="bg-gray-50 border-b px-4 py-2">
         <div className="flex gap-6 text-sm">
           <div className="flex items-center gap-2">
             <div className="w-4 h-3 bg-blue-100 border border-blue-500 rounded"></div>
-            <span>Decision → Chance/Terminal</span>
+            <span>Decision → Choices (Chance) or Direct Outcomes (Terminal)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-red-100 border border-red-500 rounded-full"></div>
-            <span>Chance → Chance/Terminal (with probability)</span>
+            <span>Chance → Uncertain Events OR Final Outcomes</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-3 bg-green-100 border border-green-500 transform rotate-45"></div>
-            <span>Terminal (with utility, no children)</span>
+            <span>Terminal (final utility, no children)</span>
           </div>
         </div>
       </div>
@@ -285,7 +312,7 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
         {renderTree()}
       </div>
 
-      {/* UPDATED Selection Panel */}
+      {/* CORRECTED Selection Panel */}
       {selectedNode && (
         <div className="fixed bottom-4 right-4 bg-white border border-gray-300 rounded-lg shadow-lg p-4 max-w-sm">
           <div className="flex items-center gap-2 mb-3">
@@ -296,8 +323,15 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
             <div>
               <div className="font-medium">{selectedNode.name}</div>
               <div className="text-sm text-gray-500 capitalize">{selectedNode.node_type} node</div>
-              {selectedNode.node_type === 'chance' && selectedNode.probability !== null && selectedNode.probability !== undefined && (
-                <div className="text-xs text-gray-600">Probability: {(selectedNode.probability * 100).toFixed(0)}%</div>
+              {selectedNode.node_type === 'chance' && (
+                <div className="text-xs text-gray-600">
+                  {isChoiceNode(selectedNode, tree.nodes || []) 
+                    ? 'Choice option (no probability)' 
+                    : selectedNode.probability !== null && selectedNode.probability !== undefined
+                      ? `Probability: ${(selectedNode.probability * 100).toFixed(0)}%`
+                      : 'Uncertain event (needs probability)'
+                  }
+                </div>
               )}
               {selectedNode.node_type === 'terminal' && selectedNode.utility !== null && selectedNode.utility !== undefined && (
                 <div className="text-xs text-gray-600">Utility: {selectedNode.utility}</div>
@@ -306,7 +340,7 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
           </div>
           
           <div className="space-y-2">
-            {/* Add Children Buttons - UPDATED */}
+            {/* Add Children Buttons */}
             {canAddChildren(selectedNode.node_type) && (
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-2">Add Child Node:</div>
@@ -319,6 +353,20 @@ const SimpleTreeVisualization: React.FC<SimpleTreeVisualizationProps> = ({
                 <div className="text-xs text-gray-500">
                   Can add: {getValidChildTypes(selectedNode.node_type).join(' or ')} nodes
                 </div>
+                
+                {/* Context-specific guidance */}
+                {selectedNode.node_type === 'decision' && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    • Chance children = choice options<br/>
+                    • Terminal children = direct outcomes
+                  </div>
+                )}
+                {selectedNode.node_type === 'chance' && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    • Chance children = uncertain events (need probability)<br/>
+                    • Terminal children = final outcomes
+                  </div>
+                )}
               </div>
             )}
             

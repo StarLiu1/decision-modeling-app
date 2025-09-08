@@ -1,4 +1,4 @@
-// Final Corrected ExpectedValueCalculator.ts - Proper probability logic
+// Fixed ExpectedValueCalculator.ts - Correct decision tree structure logic
 import { TreeNode, NodeType, isDecisionNode, isChanceNode, isTerminalNode } from '../types/DecisionTree';
 
 interface ValidationResult {
@@ -27,7 +27,7 @@ interface CalculationResult {
 class ExpectedValueCalculator {
   /**
    * Helper function to determine if a chance node is a "choice node" 
-   * (direct child of a decision node)
+   * (direct child of a decision node - represents a choice option)
    */
   private static isChoiceNode(node: TreeNode, nodes: TreeNode[]): boolean {
     if (!isChanceNode(node) || !node.parent_node_id) return false;
@@ -37,10 +37,10 @@ class ExpectedValueCalculator {
   }
 
   /**
-   * Helper function to determine if a chance node is a "regular chance node"
-   * (has uncertainty, not a choice)
+   * Helper function to determine if a chance node is an "uncertain event"
+   * (has uncertainty with probability, not a choice)
    */
-  private static isRegularChanceNode(node: TreeNode, nodes: TreeNode[]): boolean {
+  private static isUncertainEvent(node: TreeNode, nodes: TreeNode[]): boolean {
     return isChanceNode(node) && !this.isChoiceNode(node, nodes);
   }
 
@@ -76,7 +76,7 @@ class ExpectedValueCalculator {
         }
         
         if (node.probability !== null && node.probability !== undefined) {
-          errors.push(`Terminal node "${node.name}" should not have probability (probabilities belong on chance nodes)`);
+          errors.push(`Terminal node "${node.name}" should not have probability - probabilities belong on uncertain chance nodes`);
         }
         
         // Terminal nodes should not have children
@@ -86,55 +86,56 @@ class ExpectedValueCalculator {
         
       } else if (isChanceNode(node)) {
         const isChoice = this.isChoiceNode(node, nodes);
-        const isRegular = this.isRegularChanceNode(node, nodes);
+        const isUncertain = this.isUncertainEvent(node, nodes);
         
         if (isChoice) {
           // Choice nodes (direct children of decision nodes)
           if (node.probability !== null && node.probability !== undefined) {
-            warnings.push(`Choice node "${node.name}" has probability but choices don't have probabilities`);
+            warnings.push(`Choice node "${node.name}" has probability but choice options don't need probabilities`);
           }
           
           if (node.utility !== null && node.utility !== undefined) {
-            warnings.push(`Choice node "${node.name}" has utility but choices don't have utilities`);
+            warnings.push(`Choice node "${node.name}" has utility but choice options don't have utilities`);
           }
           
-          // Choice nodes should have children (the uncertain outcomes)
+          // Choice nodes should have children (the outcomes)
           if (children.length === 0) {
-            errors.push(`Choice node "${node.name}" has no outcomes`);
+            errors.push(`Choice node "${node.name}" has no outcomes - choices must lead somewhere`);
           }
           
-        } else if (isRegular) {
-          // Regular chance nodes (uncertain events)
+        } else if (isUncertain) {
+          // Uncertain event nodes (chance nodes that represent uncertainty)
           if (node.probability === null || node.probability === undefined) {
-            errors.push(`Chance node "${node.name}" is missing probability value`);
+            errors.push(`Uncertain event "${node.name}" is missing probability value`);
           } else if (node.probability < 0 || node.probability > 1) {
-            errors.push(`Chance node "${node.name}" has invalid probability: ${node.probability} (must be 0-1)`);
+            errors.push(`Uncertain event "${node.name}" has invalid probability: ${node.probability} (must be 0-1)`);
           }
           
           if (node.utility !== null && node.utility !== undefined) {
-            warnings.push(`Chance node "${node.name}" has utility but chance nodes should not have utilities`);
+            warnings.push(`Uncertain event "${node.name}" has utility but uncertain events should not have utilities`);
           }
           
-          // Regular chance nodes should have children
+          // Uncertain events should have children
           if (children.length === 0) {
-            errors.push(`Chance node "${node.name}" has no outcomes`);
+            errors.push(`Uncertain event "${node.name}" has no outcomes`);
           }
         }
         
-        // For regular chance nodes, validate that children probabilities sum to 1
-        if (isRegular && children.length > 0) {
-          const chanceChildren = children.filter(child => isChanceNode(child));
-          if (chanceChildren.length > 0) {
+        // For uncertain events with multiple children, validate probability sums
+        if (isUncertain && children.length > 1) {
+          // If children are also uncertain events, their probabilities should sum to 1
+          const uncertainChildren = children.filter(child => this.isUncertainEvent(child, nodes));
+          if (uncertainChildren.length > 1) {
             let totalProbability = 0;
             let missingProbabilities = 0;
             
-            chanceChildren.forEach(child => {
+            uncertainChildren.forEach(child => {
               if (child.probability === null || child.probability === undefined) {
                 missingProbabilities++;
-                errors.push(`Child chance node "${child.name}" of chance node "${node.name}" is missing probability`);
+                errors.push(`Uncertain event "${child.name}" under "${node.name}" is missing probability`);
               } else {
                 if (child.probability < 0 || child.probability > 1) {
-                  errors.push(`Child chance node "${child.name}" has invalid probability: ${child.probability} (must be 0-1)`);
+                  errors.push(`Uncertain event "${child.name}" has invalid probability: ${child.probability}`);
                 }
                 totalProbability += child.probability;
               }
@@ -142,7 +143,7 @@ class ExpectedValueCalculator {
             
             // Check probability sum (only if no missing probabilities)
             if (missingProbabilities === 0 && Math.abs(totalProbability - 1.0) > 0.001) {
-              errors.push(`Children of chance node "${node.name}" have probabilities that sum to ${totalProbability.toFixed(3)}, should sum to 1.0`);
+              errors.push(`Uncertain events under "${node.name}" have probabilities that sum to ${totalProbability.toFixed(3)}, should sum to 1.0`);
             }
           }
         }
@@ -161,12 +162,6 @@ class ExpectedValueCalculator {
         if (children.length === 0) {
           warnings.push(`Decision node "${node.name}" has no choices to decide between`);
         }
-        
-        // Decision nodes typically have chance nodes as children
-        const nonChanceChildren = children.filter(child => !isChanceNode(child));
-        if (nonChanceChildren.length > 0) {
-          warnings.push(`Decision node "${node.name}" has non-chance children - this is unusual in decision trees`);
-        }
       }
 
       // Validate cost (should not be negative)
@@ -183,10 +178,11 @@ class ExpectedValueCalculator {
   }
 
   /**
-   * Calculates expected value using proper recursive algorithm
+   * Calculates expected value using proper recursive algorithm for the corrected tree structure
    * EV calculation rules:
    * - Terminal nodes: EV = utility - cost
-   * - Chance nodes: EV = Σ(probability_i × EV_child_i) - cost
+   * - Choice nodes (chance under decision): EV = pass through to children, no probability weighting
+   * - Uncertain events (chance with probability): EV = pass through, parent uses probability for weighting
    * - Decision nodes: EV = max(EV_child_i) - cost
    */
   static calculateExpectedValue(nodes: TreeNode[]): CalculationResult | null {
@@ -257,7 +253,9 @@ class ExpectedValueCalculator {
       };
       
     } else if (isChanceNode(node)) {
-      // Chance node: Expected value calculation depends on context
+      const isChoice = this.isChoiceNode(node, allNodes);
+      const isUncertain = this.isUncertainEvent(node, allNodes);
+      
       if (children.length === 0) {
         // No children - treat as terminal with 0 utility
         const expectedValue = -cost;
@@ -272,11 +270,8 @@ class ExpectedValueCalculator {
         };
       }
       
-      const isChoice = this.isChoiceNode(node, allNodes);
-      
       if (isChoice) {
-        // Choice node: doesn't have its own probability, just passes through children
-        // Calculate EV for each child and take weighted average based on child probabilities
+        // Choice node: Calculate EV for each outcome and take probability-weighted average
         const childBreakdowns = children.map(child => 
           this.calculateNodeExpectedValue(child, nodeMap, childrenMap, allNodes)
         );
@@ -284,16 +279,18 @@ class ExpectedValueCalculator {
         let weightedSum = 0;
         let calculationSteps: string[] = [];
         
+        // For choice nodes, we need to look at how the outcomes are structured
         children.forEach((child, index) => {
           const childEV = childBreakdowns[index].expectedValue;
-          if (isChanceNode(child)) {
-            // Child is a chance node with probability
+          
+          if (this.isUncertainEvent(child, allNodes)) {
+            // Child is an uncertain event with probability
             const probability = child.probability || 0;
             const contribution = probability * childEV;
             weightedSum += contribution;
             calculationSteps.push(`${probability} × ${childEV.toFixed(2)} = ${contribution.toFixed(2)}`);
           } else {
-            // Child is terminal or other type - equal weight
+            // Child is terminal or choice - equal weight or direct value
             weightedSum += childEV;
             calculationSteps.push(`${childEV.toFixed(2)}`);
           }
@@ -312,19 +309,28 @@ class ExpectedValueCalculator {
           children: childBreakdowns
         };
         
-      } else {
-        // Regular chance node: has its own probability, used by parent for weighting
-        // For internal calculation, just passes through to children
+      } else if (isUncertain) {
+        // Uncertain event: Pass through to children, parent will use our probability for weighting
         const childBreakdowns = children.map(child => 
           this.calculateNodeExpectedValue(child, nodeMap, childrenMap, allNodes)
         );
         
-        // If single child, pass through; if multiple, average them
+        // Calculate weighted average of children if multiple
         let childValue = 0;
         if (children.length === 1) {
           childValue = childBreakdowns[0].expectedValue;
         } else {
-          childValue = childBreakdowns.reduce((sum, child) => sum + child.expectedValue, 0) / children.length;
+          // For multiple children under uncertain event, take weighted average
+          let totalWeight = 0;
+          children.forEach((child, index) => {
+            if (this.isUncertainEvent(child, allNodes) && child.probability) {
+              childValue += child.probability * childBreakdowns[index].expectedValue;
+              totalWeight += child.probability;
+            } else {
+              // If child doesn't have probability, treat as equal weight
+              childValue += childBreakdowns[index].expectedValue / children.length;
+            }
+          });
         }
         
         const expectedValue = childValue - cost;
@@ -338,6 +344,27 @@ class ExpectedValueCalculator {
           probability,
           cost,
           calculation: `EV = ${childValue.toFixed(2)} (from children) - ${cost} (cost) = ${expectedValue.toFixed(2)}`,
+          children: childBreakdowns
+        };
+      } else {
+        // Fallback for unclassified chance nodes
+        const childBreakdowns = children.map(child => 
+          this.calculateNodeExpectedValue(child, nodeMap, childrenMap, allNodes)
+        );
+        
+        const avgValue = children.length > 0 
+          ? childBreakdowns.reduce((sum, child) => sum + child.expectedValue, 0) / children.length
+          : 0;
+        
+        const expectedValue = avgValue - cost;
+        
+        return {
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.node_type,
+          expectedValue,
+          cost,
+          calculation: `EV = ${avgValue.toFixed(2)} (average of children) - ${cost} (cost) = ${expectedValue.toFixed(2)}`,
           children: childBreakdowns
         };
       }
@@ -433,7 +460,7 @@ class ExpectedValueCalculator {
     const path: string[] = [];
     
     const findOptimalPath = (breakdown: CalculationBreakdown): void => {
-      path.push(breakdown.nodeName);
+      path.push(`${breakdown.nodeName} (${breakdown.nodeType})`);
       
       if (breakdown.children && breakdown.children.length > 0) {
         if (breakdown.nodeType === 'decision') {
@@ -445,25 +472,30 @@ class ExpectedValueCalculator {
           findOptimalPath(bestChild);
           
         } else if (breakdown.nodeType === 'chance') {
-          // For chance nodes, show outcomes with their probabilities
-          breakdown.children.forEach((child, index) => {
-            if (index === 0) {
-              path.push(`→ Possible outcomes:`);
+          // For chance nodes, show the structure
+          if (breakdown.children.length === 1) {
+            path.push(`→ Leads to: ${breakdown.children[0].nodeName}`);
+            findOptimalPath(breakdown.children[0]);
+          } else {
+            path.push(`→ Possible outcomes:`);
+            breakdown.children.forEach(child => {
+              if (child.probability !== undefined) {
+                const probability = (child.probability * 100).toFixed(1);
+                path.push(`   • ${child.nodeName} (${probability}% chance, EV: ${child.expectedValue.toFixed(2)})`);
+              } else {
+                path.push(`   • ${child.nodeName} (EV: ${child.expectedValue.toFixed(2)})`);
+              }
+            });
+            
+            // Continue with the best outcome for demonstration
+            const bestChild = breakdown.children.reduce((best, current) => 
+              current.expectedValue > best.expectedValue ? current : best
+            );
+            
+            if (bestChild.children && bestChild.children.length > 0) {
+              path.push(`→ Best path continues with: ${bestChild.nodeName}`);
+              findOptimalPath(bestChild);
             }
-            const probability = (child.probability || 0) * 100;
-            path.push(`   • ${child.nodeName} (${probability.toFixed(1)}% chance, EV: ${child.expectedValue.toFixed(2)})`);
-          });
-          
-          // Continue with the most likely outcome for the path
-          const mostLikelyChild = breakdown.children.reduce((best, current) => {
-            const currentProb = current.probability || 0;
-            const bestProb = best.probability || 0;
-            return currentProb > bestProb ? current : best;
-          });
-          
-          if (mostLikelyChild.children && mostLikelyChild.children.length > 0) {
-            path.push(`→ Most likely path continues with: ${mostLikelyChild.nodeName}`);
-            findOptimalPath(mostLikelyChild);
           }
         }
       }

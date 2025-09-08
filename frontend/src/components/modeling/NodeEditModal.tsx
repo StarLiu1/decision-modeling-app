@@ -1,4 +1,4 @@
-// Final Corrected NodeEditModal.tsx - Updated for correct probability logic
+// Fixed NodeEditModal.tsx - Clearer decision tree structure logic
 import React, { useState, useEffect } from 'react';
 import { TreeNode } from '../../types/DecisionTree';
 
@@ -38,25 +38,60 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Helper function to determine if a chance node would be a "choice node"
-  const wouldBeChoiceNode = (nodeType: string, parentType?: string): boolean => {
-    return nodeType === 'chance' && parentType === 'decision';
-  };
-
-  // Helper function to determine if a chance node would be a "regular chance node" 
-  const wouldBeRegularChanceNode = (nodeType: string, parentType?: string): boolean => {
-    return nodeType === 'chance' && parentType !== 'decision';
-  };
-
-  // Helper function to determine if a node needs probability
-  const needsProbability = (nodeType: string, parentType?: string): boolean => {
-    // Only regular chance nodes need probability
-    return wouldBeRegularChanceNode(nodeType, parentType);
-  };
-
-  // Helper function to determine if a node needs utility
-  const needsUtility = (nodeType: string): boolean => {
-    return nodeType === 'terminal';
+  // CLEARER: Helper to determine node context and requirements
+  const getNodeContext = (nodeType: string, parentType?: string) => {
+    if (nodeType === 'terminal') {
+      return {
+        needsProbability: false,
+        needsUtility: true,
+        context: 'Final outcome',
+        description: 'An endpoint with a final utility value',
+        probabilityNote: 'Terminal nodes never have probabilities (they come from parent chance nodes)',
+        utilityNote: 'Required - the final payoff or value of this outcome'
+      };
+    }
+    
+    if (nodeType === 'chance') {
+      if (parentType === 'decision') {
+        return {
+          needsProbability: false,
+          needsUtility: false,
+          context: 'Choice option',
+          description: 'A choice available to the decision maker',
+          probabilityNote: 'Choice options do not have probabilities - they represent available alternatives',
+          utilityNote: 'Not needed - choices lead to uncertain events or outcomes'
+        };
+      } else {
+        return {
+          needsProbability: true,
+          needsUtility: false,
+          context: 'Uncertain event',
+          description: 'An event with a probability of occurrence',
+          probabilityNote: 'Required - the likelihood this event occurs (0.0 to 1.0)',
+          utilityNote: 'Not needed - uncertain events lead to final outcomes'
+        };
+      }
+    }
+    
+    if (nodeType === 'decision') {
+      return {
+        needsProbability: false,
+        needsUtility: false,
+        context: 'Decision point',
+        description: 'A point where you choose between alternatives',
+        probabilityNote: 'Decision nodes never have probabilities - they represent choices you control',
+        utilityNote: 'Not needed - decisions lead to alternatives or outcomes'
+      };
+    }
+    
+    return {
+      needsProbability: false,
+      needsUtility: false,
+      context: 'Unknown',
+      description: 'Unknown node type',
+      probabilityNote: '',
+      utilityNote: ''
+    };
   };
 
   // Reset form when modal opens/closes
@@ -77,11 +112,11 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
         let defaultType: 'decision' | 'chance' | 'terminal' = 'decision';
         
         if (selectedParentNode) {
-          // Default child types based on parent
+          // Suggest appropriate child types
           if (selectedParentNode.node_type === 'decision') {
-            defaultType = 'chance'; // Decision nodes have chance children (choices)
+            defaultType = 'chance'; // Decision → Chance (choice)
           } else if (selectedParentNode.node_type === 'chance') {
-            defaultType = 'chance'; // Chance nodes can have chance children (uncertain events)
+            defaultType = 'terminal'; // Chance → Terminal (outcome) is most common
           }
         }
         
@@ -94,8 +129,8 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
           utility: undefined,
         });
         
-        // Set default values based on type and parent
-        handleNodeTypeChange(defaultType, false); // false = don't reset name
+        // Set appropriate defaults based on context
+        handleNodeTypeChange(defaultType, false);
       }
       setErrors({});
     }
@@ -109,52 +144,30 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
     }
 
     const parentType = selectedParentNode?.node_type;
+    const context = getNodeContext(formData.node_type, parentType);
 
-    // Validate based on node type and parent context
-    if (formData.node_type === 'terminal') {
-      // Terminal nodes must have utility, never probability
+    // Validate based on node requirements
+    if (context.needsProbability) {
+      if (formData.probability === undefined || formData.probability === null) {
+        newErrors.probability = 'This node type requires a probability value';
+      } else if (formData.probability < 0 || formData.probability > 1) {
+        newErrors.probability = 'Probability must be between 0 and 1';
+      }
+    } else {
+      // Warn if probability is set when not needed
+      if (formData.probability !== undefined && formData.probability !== null) {
+        newErrors.probability = `${context.context} should not have a probability`;
+      }
+    }
+
+    if (context.needsUtility) {
       if (formData.utility === undefined || formData.utility === null) {
-        newErrors.utility = 'Terminal nodes must have a utility value';
+        newErrors.utility = 'This node type requires a utility value';
       }
-      
-      if (formData.probability !== undefined && formData.probability !== null) {
-        newErrors.probability = 'Terminal nodes should not have probabilities (probabilities belong on chance nodes)';
-      }
-      
-    } else if (formData.node_type === 'chance') {
-      const isChoice = wouldBeChoiceNode(formData.node_type, parentType);
-      const isRegular = wouldBeRegularChanceNode(formData.node_type, parentType);
-      
-      if (isChoice) {
-        // Choice nodes don't need probability or utility
-        if (formData.probability !== undefined && formData.probability !== null) {
-          newErrors.probability = 'Choice nodes (children of decisions) should not have probabilities';
-        }
-        
-        if (formData.utility !== undefined && formData.utility !== null) {
-          newErrors.utility = 'Choice nodes should not have utilities';
-        }
-        
-      } else if (isRegular) {
-        // Regular chance nodes need probability
-        if (formData.probability === undefined || formData.probability === null) {
-          newErrors.probability = 'Chance nodes representing uncertainty must have probability';
-        } else if (formData.probability < 0 || formData.probability > 1) {
-          newErrors.probability = 'Probability must be between 0 and 1';
-        }
-        
-        if (formData.utility !== undefined && formData.utility !== null) {
-          newErrors.utility = 'Chance nodes should not have utilities';
-        }
-      }
-      
-    } else if (formData.node_type === 'decision') {
-      // Decision nodes should not have probability or utility
-      if (formData.probability !== undefined && formData.probability !== null) {
-        newErrors.probability = 'Decision nodes should not have probabilities';
-      }
+    } else {
+      // Warn if utility is set when not needed
       if (formData.utility !== undefined && formData.utility !== null) {
-        newErrors.utility = 'Decision nodes should not have utilities';
+        newErrors.utility = `${context.context} should not have a utility value`;
       }
     }
 
@@ -172,7 +185,10 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
 
     setIsLoading(true);
     try {
-      // Clean up data based on node type and context
+      const parentType = selectedParentNode?.node_type;
+      const context = getNodeContext(formData.node_type, parentType);
+      
+      // Clean up data based on context requirements
       const cleanedData: CreateNodeRequest = {
         name: formData.name,
         node_type: formData.node_type,
@@ -180,15 +196,13 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
         cost: formData.cost || 0,
       };
 
-      const parentType = selectedParentNode?.node_type;
-
-      // Only include probability if needed (regular chance nodes only)
-      if (needsProbability(formData.node_type, parentType)) {
+      // Only include probability if needed
+      if (context.needsProbability) {
         cleanedData.probability = formData.probability;
       }
 
-      // Only include utility for terminal nodes
-      if (needsUtility(formData.node_type)) {
+      // Only include utility if needed
+      if (context.needsUtility) {
         cleanedData.utility = formData.utility;
       }
 
@@ -211,62 +225,23 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
       }
       
       const parentType = selectedParentNode?.node_type;
+      const context = getNodeContext(newType, parentType);
       
       // Set appropriate defaults when changing type
-      if (needsProbability(newType, parentType)) {
-        updated.probability = updated.probability || 0.5; // Default probability for regular chance nodes
+      if (context.needsProbability) {
+        updated.probability = updated.probability || 0.5; // Default probability
       } else {
         updated.probability = undefined; // Clear probability if not needed
       }
       
-      if (needsUtility(newType)) {
-        updated.utility = updated.utility || 0; // Default utility for terminal nodes
+      if (context.needsUtility) {
+        updated.utility = updated.utility || 0; // Default utility
       } else {
-        updated.utility = undefined; // Clear utility for non-terminal nodes
+        updated.utility = undefined; // Clear utility if not needed
       }
       
       return updated;
     });
-  };
-
-  const getNodeTypeInfo = (type: string) => {
-    const parentType = selectedParentNode?.node_type;
-    
-    switch (type) {
-      case 'decision':
-        return {
-          icon: '□',
-          color: 'text-blue-600',
-          description: 'A choice point where you decide between options',
-          properties: 'No probability or utility needed',
-          context: 'Typically has chance nodes as children (choice options)'
-        };
-      case 'chance':
-        const isChoice = wouldBeChoiceNode(type, parentType);
-        const chanceProps = isChoice 
-          ? 'No probability or utility needed (represents a choice option)'
-          : 'Requires probability (0.0 to 1.0), no utility';
-        const chanceContext = isChoice 
-          ? 'Represents a choice option under a decision'
-          : 'Represents an uncertain event with probability';
-        return {
-          icon: '○',
-          color: 'text-red-600',
-          description: isChoice ? 'A choice option' : 'An uncertain event',
-          properties: chanceProps,
-          context: chanceContext
-        };
-      case 'terminal':
-        return {
-          icon: '◊',
-          color: 'text-green-600',
-          description: 'An endpoint with a final outcome',
-          properties: 'Requires utility, no probability (probabilities come from parent chance nodes)',
-          context: 'Represents a final payoff or outcome'
-        };
-      default:
-        return { icon: '?', color: 'text-gray-600', description: 'Unknown node type', properties: '', context: '' };
-    }
   };
 
   // Get valid child types for the parent node
@@ -277,9 +252,9 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
     
     switch (selectedParentNode.node_type) {
       case 'decision':
-        return ['chance']; // Decision nodes have chance children (choices)
+        return ['chance', 'terminal']; // Decisions can have choices (chance) or direct outcomes (terminal)
       case 'chance':
-        return ['chance', 'terminal']; // Chance nodes can have chance (uncertain events) or terminal outcomes
+        return ['chance', 'terminal']; // Chance can have uncertain events (chance) or outcomes (terminal)
       case 'terminal':
         return []; // Terminal nodes cannot have children
       default:
@@ -290,13 +265,13 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
   if (!isOpen) return null;
 
   const isEditing = !!editingNode;
-  const nodeTypeInfo = getNodeTypeInfo(formData.node_type);
-  const validChildTypes = getValidChildTypes();
   const parentType = selectedParentNode?.node_type;
+  const nodeContext = getNodeContext(formData.node_type, parentType);
+  const validChildTypes = getValidChildTypes();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b">
           <h2 className="text-xl font-semibold text-gray-800">
@@ -314,13 +289,14 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
         <div className="p-6 space-y-4">
           {/* Parent Context */}
           {selectedParentNode && !isEditing && (
-            <div className="bg-gray-50 p-3 rounded-lg">
-              <p className="text-sm text-gray-600">
-                Adding child to: <span className="font-medium">{selectedParentNode.name}</span>
-                <span className="text-xs block mt-1">
-                  Parent type: {selectedParentNode.node_type} → Can add: {validChildTypes.join(', ')}
-                </span>
-              </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="text-sm text-blue-800">
+                <div className="font-medium">Adding child to: {selectedParentNode.name}</div>
+                <div className="text-xs mt-1">
+                  Parent type: <span className="font-medium">{selectedParentNode.node_type}</span> → 
+                  Can add: <span className="font-medium">{validChildTypes.join(', ')}</span>
+                </div>
+              </div>
             </div>
           )}
 
@@ -350,12 +326,13 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               {(['decision', 'chance', 'terminal'] as const)
                 .filter(type => isEditing || validChildTypes.includes(type) || validChildTypes.length === 0)
                 .map((type) => {
-                const info = getNodeTypeInfo(type);
+                const context = getNodeContext(type, parentType);
                 const isDisabled = !isEditing && validChildTypes.length > 0 && !validChildTypes.includes(type);
                 
                 return (
                   <label key={type} className={`flex items-start p-3 border rounded-lg cursor-pointer ${
-                    isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-50' : 'hover:bg-gray-50'
+                    isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-50' : 
+                    formData.node_type === type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
                   }`}>
                     <input
                       type="radio"
@@ -366,12 +343,16 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
                       disabled={isDisabled}
                       className="mr-3 mt-0.5"
                     />
-                    <span className={`text-lg mr-2 ${info.color} mt-0.5`}>{info.icon}</span>
+                    <span className={`text-lg mr-2 mt-0.5 ${
+                      type === 'decision' ? 'text-blue-600' : 
+                      type === 'chance' ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      {type === 'decision' ? '□' : type === 'chance' ? '○' : '◊'}
+                    </span>
                     <div className="flex-1">
                       <div className="font-medium capitalize">{type}</div>
-                      <div className="text-sm text-gray-500">{info.description}</div>
-                      <div className="text-xs text-gray-400 mt-1">{info.properties}</div>
-                      <div className="text-xs text-blue-600 mt-1">{info.context}</div>
+                      <div className="text-sm text-gray-600 mt-1">{context.description}</div>
+                      <div className="text-xs text-blue-600 mt-1">{context.context}</div>
                     </div>
                   </label>
                 );
@@ -379,8 +360,21 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
             </div>
           </div>
 
-          {/* Probability (only for regular chance nodes) */}
-          {needsProbability(formData.node_type, parentType) && (
+          {/* Current Node Context Display */}
+          <div className="bg-gray-50 border rounded-lg p-3">
+            <div className="text-sm">
+              <div className="font-medium text-gray-800 mb-2">
+                Current Selection: {nodeContext.context}
+              </div>
+              <div className="space-y-1 text-xs text-gray-600">
+                <div><strong>Probability:</strong> {nodeContext.probabilityNote}</div>
+                <div><strong>Utility:</strong> {nodeContext.utilityNote}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Probability (only when needed) */}
+          {nodeContext.needsProbability && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Probability * (0.0 to 1.0)
@@ -402,13 +396,13 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               />
               {errors.probability && <p className="text-red-500 text-xs mt-1">{errors.probability}</p>}
               <p className="text-xs text-gray-500 mt-1">
-                Required for uncertain events (chance nodes that are not choice options)
+                {nodeContext.probabilityNote}
               </p>
             </div>
           )}
 
-          {/* Utility (only for terminal nodes) */}
-          {needsUtility(formData.node_type) && (
+          {/* Utility (only when needed) */}
+          {nodeContext.needsUtility && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Utility/Value *
@@ -428,7 +422,7 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               />
               {errors.utility && <p className="text-red-500 text-xs mt-1">{errors.utility}</p>}
               <p className="text-xs text-gray-500 mt-1">
-                Final payoff or outcome value (probability comes from parent chance node)
+                {nodeContext.utilityNote}
               </p>
             </div>
           )}
@@ -464,10 +458,10 @@ const NodeEditModal: React.FC<NodeEditModalProps> = ({
               <div className="text-sm text-blue-800">
                 <div className="font-medium mb-1">💡 Decision Tree Structure:</div>
                 <ul className="text-xs space-y-1">
-                  <li><strong>Decision → Chance (choices)</strong> - Choice options, no probability</li>
-                  <li><strong>Chance → Chance (events)</strong> - Uncertain events, need probability</li>
-                  <li><strong>Chance → Terminal</strong> - Final outcomes, need utility only</li>
-                  <li><strong>Terminal nodes</strong> - Never have probability (comes from parent)</li>
+                  <li><strong>Decision → Chance:</strong> Choice options (no probability needed)</li>
+                  <li><strong>Decision → Terminal:</strong> Direct outcomes (need utility)</li>
+                  <li><strong>Chance → Chance:</strong> Uncertain events (need probability)</li>
+                  <li><strong>Chance → Terminal:</strong> Final outcomes (need utility only)</li>
                 </ul>
               </div>
             </div>
